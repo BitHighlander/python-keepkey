@@ -257,6 +257,89 @@ class Commands(object):
         else:
             return 'Signed raw transaction: %s' % tx_hex
 
+    def ethereum_cosmos_tx(self, args):
+        from ethjsonrpc import EthJsonRpc
+        from ethjsonrpc.utils import hex_to_dec
+        import rlp
+
+        value = args.value
+        if ' ' in value:
+            value, unit = value.split(' ', 1)
+            if unit.lower() not in ether_units:
+                raise CallException(types.Failure_Other, "Unrecognized ether unit %r" % unit)
+            value = int(value) * ether_units[unit.lower()]
+        else:
+            value = int(value)
+
+        gas_price = args.gas_price
+        if gas_price is not None:
+            if ' ' in gas_price:
+                gas_price, unit = gas_price.split(' ', 1)
+                if unit.lower() not in ether_units:
+                    raise CallException(types.Failure_Other, "Unrecognized gas price unit %r" % unit)
+                gas_price = int(gas_price) * ether_units[unit.lower()]
+            else:
+                gas_price = int(gas_price)
+
+        gas_limit = args.gas
+        if gas_limit is not None:
+            gas_limit = int(gas_limit)
+
+        if args.to.startswith('0x') or args.to.startswith('0X'):
+            to_address = args.to[2:].decode('hex')
+        else:
+            to_address = args.to.decode('hex')
+
+        nonce = args.nonce
+        if nonce:
+            nonce = int(nonce)
+
+        address_n = self.client.expand_path(args.n)
+        address = "0x%s" % (binascii.hexlify(self.client.ethereum_get_address(address_n)),)
+
+        if gas_price is None or gas_limit is None or nonce is None:
+            host, port = args.host.split(':')
+            eth = EthJsonRpc(host, int(port))
+
+        if not args.data:
+            args.data = ''
+        elif args.data.startswith('0x'):
+            args.data = args.data[2:]
+        data = binascii.unhexlify(args.data)
+
+        if gas_price is None:
+            gas_price = eth.eth_gasPrice()
+
+        if gas_limit is None:
+            gas_limit = eth.eth_estimateGas(
+                to_address=args.to,
+                from_address=address,
+                value=("0x%x" % value),
+                data="0x"+args.data)
+
+        if nonce is None:
+            nonce = eth.eth_getTransactionCount(address)
+
+        sig = self.client.ethereum_sign_tx(
+            n=address_n,
+            nonce=nonce,
+            gas_price=gas_price,
+            gas_limit=gas_limit,
+            to=to_address,
+            value=value,
+            data=data,
+            chain_id=args.chain_id)
+
+        transaction = rlp.encode(
+            (nonce, gas_price, gas_limit, to_address, value, data) + sig)
+        tx_hex = '0x%s' % binascii.hexlify(transaction)
+
+        if args.publish:
+            tx_hash = eth.eth_sendRawTransaction(tx_hex)
+            return 'Transaction published with ID: %s' % tx_hash
+        else:
+            return 'Signed raw transaction: %s' % tx_hex
+
     def eos_get_public_key(self, args):
         address_n = self.client.expand_path(args.n)
         res = self.client.eos_get_public_key(address_n, args.show_display)
