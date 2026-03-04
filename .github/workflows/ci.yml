@@ -71,8 +71,8 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install -e ".[ethereum]"
-          pip install pytest semver
+          pip install -e .
+          pip install pytest semver rlp
 
       - name: Wait for emulator
         run: |
