@@ -71,6 +71,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
+          pip install "protobuf>=3.20,<4"
           pip install -e .
           pip install pytest semver rlp
 
