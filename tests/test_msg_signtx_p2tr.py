@@ -30,6 +30,7 @@ from keepkeylib.tools import parse_path
 from keepkeylib.client import CallException
 from keepkeylib import tx_api
 
+HAS_P2TR = hasattr(proto_types, 'PAYTOTAPROOT')
 
 TXHASH_5c6661 = bytes.fromhex(
     "5c66611fecd82c893305ea50ed3e94cd5404cb33a6cf4bf49d1330a95fd0a046"
@@ -56,6 +57,7 @@ def request_finished() -> proto.TxRequest:
   return proto.TxRequest(request_type=proto_types.TXFINISHED)
 
 
+@unittest.skipUnless(HAS_P2TR, "Protobuf types do not include PAYTOTAPROOT")
 class TestMsgSigntx(common.KeepKeyTest):
   
   def test_send_p2tr_only(self):

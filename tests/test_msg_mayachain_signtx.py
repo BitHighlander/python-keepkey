@@ -10,6 +10,9 @@ from keepkeylib.tools import parse_path
 
 DEFAULT_BIP32_PATH = "m/44h/931h/0h/0/0"
 
+from keepkeylib.client import KeepKeyClient
+HAS_MAYACHAIN = hasattr(KeepKeyClient, 'mayachain_sign_tx')
+
 def make_send(from_address, to_address, amount):
     return {
         'type': 'mayachain/MsgSend',
@@ -23,6 +26,7 @@ def make_send(from_address, to_address, amount):
         }
     }
 
+@unittest.skipUnless(HAS_MAYACHAIN, "Client library does not support MAYAChain")
 class TestMsgThorChainSignTx(common.KeepKeyTest):
 
     def test_mayachain_sign_tx(self):

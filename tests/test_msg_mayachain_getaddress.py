@@ -9,6 +9,10 @@ from keepkeylib.tools import parse_path
 
 DEFAULT_BIP32_PATH = "m/44h/931h/0h/0/0"
 
+from keepkeylib.client import KeepKeyClient
+HAS_MAYACHAIN = hasattr(KeepKeyClient, 'mayachain_get_address')
+
+@unittest.skipUnless(HAS_MAYACHAIN, "Client library does not support MAYAChain")
 class TestMsgMayaChainGetAddress(common.KeepKeyTest):
 
     def test_mayachain_get_address(self):
