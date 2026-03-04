@@ -91,6 +91,7 @@ jobs:
         env:
           KK_TRANSPORT_MAIN: "127.0.0.1:11044"
           KK_TRANSPORT_DEBUG: "127.0.0.1:11045"
+          PYTHONPATH: "${{ github.workspace }}/keepkeylib:${{ github.workspace }}"
         run: |
           cd tests
           pytest -v --junitxml=junit.xml 2>&1 | tee pytest-output.txt
