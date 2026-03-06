@@ -45,6 +45,7 @@ from . import messages_ripple_pb2 as ripple_proto
 from . import messages_tendermint_pb2 as tendermint_proto
 from . import messages_thorchain_pb2 as thorchain_proto
 from . import messages_mayachain_pb2 as mayachain_proto
+from . import messages_solana_pb2 as solana_proto
 from . import types_pb2 as types
 from . import eos
 from . import nano
@@ -1137,6 +1138,29 @@ class ProtocolMixin(object):
             )
 
         return resp
+
+    # ── Solana ──────────────────────────────────────────────────────
+
+    @field('address')
+    @expect(solana_proto.SolanaAddress)
+    def solana_get_address(self, address_n, show_display=False):
+        return self.call(
+            solana_proto.SolanaGetAddress(address_n=address_n, show_display=show_display)
+        )
+
+    @session
+    @expect(solana_proto.SolanaSignedTx)
+    def solana_sign_tx(self, address_n, raw_tx):
+        return self.call(
+            solana_proto.SolanaSignTx(address_n=address_n, raw_tx=raw_tx)
+        )
+
+    @session
+    @expect(solana_proto.SolanaMessageSignature)
+    def solana_sign_message(self, address_n, message):
+        return self.call(
+            solana_proto.SolanaSignMessage(address_n=address_n, message=message)
+        )
 
     @field('address')
     @expect(ripple_proto.RippleAddress)
