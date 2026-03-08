@@ -46,6 +46,7 @@ from . import messages_tendermint_pb2 as tendermint_proto
 from . import messages_thorchain_pb2 as thorchain_proto
 from . import messages_mayachain_pb2 as mayachain_proto
 from . import messages_solana_pb2 as solana_proto
+from . import messages_zcash_pb2 as zcash_proto
 from . import types_pb2 as types
 from . import eos
 from . import nano
@@ -1161,6 +1162,56 @@ class ProtocolMixin(object):
         return self.call(
             solana_proto.SolanaSignMessage(address_n=address_n, message=message)
         )
+
+    # ── Zcash Orchard (shielded) ─────────────────────────────────────
+    # See messages-zcash.proto for full message definitions.
+
+    @session
+    @expect(zcash_proto.ZcashOrchardFVK)
+    def zcash_get_orchard_fvk(self, address_n, account=0, show_display=False):
+        return self.call(
+            zcash_proto.ZcashGetOrchardFVK(
+                address_n=address_n,
+                account=account,
+                show_display=show_display,
+            )
+        )
+
+    @session
+    def zcash_sign_pczt(self, address_n, n_actions, total_amount, fee,
+                        branch_id, header_digest, transparent_digest,
+                        sapling_digest, orchard_digest, actions,
+                        account=0, orchard_flags=None,
+                        orchard_value_balance=None, orchard_anchor=None):
+        """Sign a Zcash Orchard PCZT.
+
+        *actions* is a list of dicts, each passed to ZcashPCZTAction.
+        Returns ZcashSignedPCZT with .signatures and .txid.
+        """
+        resp = self.call(
+            zcash_proto.ZcashSignPCZT(
+                address_n=address_n,
+                account=account,
+                n_actions=n_actions,
+                total_amount=total_amount,
+                fee=fee,
+                branch_id=branch_id,
+                header_digest=header_digest,
+                transparent_digest=transparent_digest,
+                sapling_digest=sapling_digest,
+                orchard_digest=orchard_digest,
+                orchard_flags=orchard_flags,
+                orchard_value_balance=orchard_value_balance,
+                orchard_anchor=orchard_anchor,
+            )
+        )
+        # Stream actions in response to ZcashPCZTActionAck
+        for action in actions:
+            if isinstance(resp, zcash_proto.ZcashPCZTActionAck):
+                resp = self.call(zcash_proto.ZcashPCZTAction(**action))
+            else:
+                break
+        return resp
 
     @field('address')
     @expect(ripple_proto.RippleAddress)
