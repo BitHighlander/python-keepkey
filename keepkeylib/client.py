@@ -45,6 +45,7 @@ from . import messages_ripple_pb2 as ripple_proto
 from . import messages_tendermint_pb2 as tendermint_proto
 from . import messages_thorchain_pb2 as thorchain_proto
 from . import messages_mayachain_pb2 as mayachain_proto
+from . import messages_zcash_pb2 as zcash_proto
 from . import types_pb2 as types
 from . import eos
 from . import nano
@@ -1470,6 +1471,17 @@ class ProtocolMixin(object):
             return False
 
         raise Exception("Unexpected result %s" % resp)
+
+    # ── Zcash Orchard ──────────────────────────────────────────
+    @expect(zcash_proto.ZcashOrchardFVK)
+    def zcash_get_orchard_fvk(self, address_n, account=0, show_display=False):
+        return self.call(
+            zcash_proto.ZcashGetOrchardFVK(
+                address_n=address_n,
+                account=account,
+                show_display=show_display,
+            )
+        )
 
 class KeepKeyClient(ProtocolMixin, TextUIMixin, BaseClient):
     pass

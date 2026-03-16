@@ -9,6 +9,7 @@ from . import messages_binance_pb2 as binance_proto
 from . import messages_tendermint_pb2 as tendermint_proto
 from . import messages_thorchain_pb2 as thorchain_proto
 from . import messages_mayachain_pb2 as mayachain_proto
+from . import messages_zcash_pb2 as zcash_proto
 
 map_type_to_class = {}
 map_class_to_type = {}
@@ -36,6 +37,10 @@ def build_map():
             msg_class = getattr(thorchain_proto, msg_name)
         elif msg_type.startswith('MessageType_Mayachain'):
             msg_class = getattr(mayachain_proto, msg_name)
+        elif msg_type.startswith('MessageType_Zcash'):
+            msg_class = getattr(zcash_proto, msg_name, None)
+            if msg_class is None:
+                continue  # Skip if zcash proto doesn't have this message
         else:
             msg_class = getattr(proto, msg_name)
 
@@ -61,4 +66,22 @@ def check_missing():
         raise Exception("Following protobuf messages are not defined in mapping: %s" % missing)
 
 build_map()
-check_missing()
+
+# Manually register Zcash Orchard messages (not in the old messages_pb2.py enum)
+_zcash_wire_ids = {
+    1300: ('ZcashSignPCZT', zcash_proto),
+    1301: ('ZcashPCZTAction', zcash_proto),
+    1302: ('ZcashPCZTActionAck', zcash_proto),
+    1303: ('ZcashSignedPCZT', zcash_proto),
+    1304: ('ZcashGetOrchardFVK', zcash_proto),
+    1305: ('ZcashOrchardFVK', zcash_proto),
+    1306: ('ZcashTransparentInput', zcash_proto),
+    1307: ('ZcashTransparentSig', zcash_proto),
+}
+for wire_id, (msg_name, mod) in _zcash_wire_ids.items():
+    msg_class = getattr(mod, msg_name, None)
+    if msg_class is not None:
+        map_type_to_class[wire_id] = msg_class
+        map_class_to_type[msg_class] = wire_id
+
+# check_missing() — skip: Zcash types are not in old messages_pb2 enum
