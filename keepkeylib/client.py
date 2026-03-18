@@ -635,6 +635,15 @@ class ProtocolMixin(object):
         return response
 
     @session
+    @expect(eth_proto.EthereumMetadataAck)
+    def ethereum_send_tx_metadata(self, signed_payload, metadata_version=1, key_id=0):
+        msg = eth_proto.EthereumTxMetadata(
+            signed_payload=signed_payload,
+            metadata_version=metadata_version,
+            key_id=key_id,
+        )
+        return self.call(msg)
+
     def ethereum_sign_tx(self, n, nonce, gas_limit,  value, gas_price=None, max_fee_per_gas=None, max_priority_fee_per_gas=None, to=None, to_n=None, address_type=None, data=None, chain_id=None):
         from keepkeylib.tools import int_to_big_endian
 
