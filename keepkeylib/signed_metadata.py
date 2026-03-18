@@ -25,9 +25,93 @@ CLASSIFICATION_OPAQUE = 0
 CLASSIFICATION_VERIFIED = 1
 CLASSIFICATION_MALFORMED = 2
 
-# Test key: private key = 0x01 (secp256k1 generator point G)
-# Only for testing — production uses HSM-protected key.
-TEST_PRIVATE_KEY = b'\x00' * 31 + b'\x01'
+# ── Test key derivation (BIP-39 + SignIdentity path) ──────────────────
+# Uses KeepKey's standard SignIdentity operation for key derivation.
+# Any KeepKey loaded with the same mnemonic derives the same key.
+#
+# Identity fields (what SignIdentity receives):
+#   proto: "ssh"          — selects raw SHA256 signing (no prefix wrapping)
+#   host:  "keepkey.com"  — the domain
+#   path:  "/insight"     — the purpose
+#   index: 0-3            — key slot
+#
+# The proto="ssh" is an internal detail that selects the firmware's
+# sshMessageSign() code path (SHA256 + secp256k1, no prefix).
+# Users interact with host + path only.
+
+TEST_MNEMONIC = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
+
+# Identity fields — must match pioneer-insight keygen exactly
+INSIGHT_IDENTITY = {
+    'proto': 'ssh',
+    'host': 'keepkey.com',
+    'path': '/insight',
+}
+
+def _identity_fingerprint(identity, index):
+    """Match firmware's cryptoIdentityFingerprint() exactly.
+
+    Firmware order: index(4 LE) + proto + "://" + host + path
+    """
+    import struct as _s
+    ctx = hashlib.sha256()
+    ctx.update(_s.pack('<I', index))
+    if identity.get('proto'):
+        ctx.update(identity['proto'].encode())
+        ctx.update(b'://')
+    if identity.get('user'):
+        ctx.update(identity['user'].encode())
+        ctx.update(b'@')
+    if identity.get('host'):
+        ctx.update(identity['host'].encode())
+    if identity.get('port'):
+        ctx.update(b':')
+        ctx.update(identity['port'].encode())
+    if identity.get('path'):
+        ctx.update(identity['path'].encode())
+    return ctx.digest()
+
+def _derive_hardened(parent_key, parent_chain, index):
+    """BIP-32 hardened child derivation."""
+    import hmac as _hmac
+    data = b'\x00' + parent_key + struct.pack('>I', index)
+    I = _hmac.new(parent_chain, data, 'sha512').digest()
+    il = int.from_bytes(I[:32], 'big')
+    pk = int.from_bytes(parent_key, 'big')
+    n = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
+    child = (pk + il) % n
+    return child.to_bytes(32, 'big'), I[32:]
+
+def _mnemonic_to_seed(mnemonic, passphrase=''):
+    import hmac as _hmac
+    pw = mnemonic.encode('utf-8')
+    salt = ('mnemonic' + passphrase).encode('utf-8')
+    return hashlib.pbkdf2_hmac('sha512', pw, salt, 2048, dklen=64)
+
+def _derive_insight_key(mnemonic, slot=0):
+    """Derive the signing key matching KeepKey's SignIdentity for insight."""
+    import hmac as _hmac
+    seed = _mnemonic_to_seed(mnemonic)
+    I = _hmac.new(b'Bitcoin seed', seed, 'sha512').digest()
+    key, chain = I[:32], I[32:]
+
+    # Path: m/13'/hash[0..3]'/hash[4..7]'/hash[8..11]'/hash[12..15]'
+    fp = _identity_fingerprint(INSIGHT_IDENTITY, slot)
+    path = [
+        0x80000000 | 13,
+        0x80000000 | int.from_bytes(fp[0:4], 'little'),
+        0x80000000 | int.from_bytes(fp[4:8], 'little'),
+        0x80000000 | int.from_bytes(fp[8:12], 'little'),
+        0x80000000 | int.from_bytes(fp[12:16], 'little'),
+    ]
+
+    for idx in path:
+        key, chain = _derive_hardened(key, chain, idx)
+
+    return key
+
+# Derive the test private key from the standard test mnemonic
+TEST_PRIVATE_KEY = _derive_insight_key(TEST_MNEMONIC, slot=0)
 
 
 def serialize_metadata(
