@@ -69,17 +69,11 @@ class TestZcashOrchardFVK(common.KeepKeyTest):
         rivk_int = bytes_to_int_le(rivk)
         self.assertTrue(rivk_int < PALLAS_Q, "rivk must be < Pallas order q, got 0x%064x" % rivk_int)
 
-    @unittest.expectedFailure
     def test_fvk_reference_vectors(self):
         """FVK must match reference values from the orchard Rust crate.
 
         Uses mnemonic "all all all all all all all all all all all all"
         with account 0, which is the standard test seed.
-
-        NOTE: expectedFailure because C derivation does not yet match
-        the orchard Rust crate output byte-for-byte. The seed access
-        is now correct (storage_getRawSeed), but the ZIP-32 derivation
-        internals need debugging. Remove once vectors match.
         """
         self.setup_mnemonic_allallall()
 
