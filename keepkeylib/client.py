@@ -48,6 +48,7 @@ from . import messages_mayachain_pb2 as mayachain_proto
 from . import messages_solana_pb2 as solana_proto
 from . import messages_tron_pb2 as tron_proto
 from . import messages_ton_pb2 as ton_proto
+from . import messages_zcash_pb2 as zcash_proto
 from . import types_pb2 as types
 from . import eos
 from . import nano
@@ -1612,6 +1613,95 @@ class ProtocolMixin(object):
         return self.call(
             ton_proto.TonSignTx(address_n=address_n, raw_tx=raw_tx)
         )
+
+    # ── Zcash Orchard ──────────────────────────────────────────
+    @expect(zcash_proto.ZcashOrchardFVK)
+    def zcash_get_orchard_fvk(self, address_n, account=None, show_display=False):
+        kwargs = dict(address_n=address_n, show_display=show_display)
+        if account is not None:
+            kwargs['account'] = account
+        return self.call(zcash_proto.ZcashGetOrchardFVK(**kwargs))
+
+    @session
+    def zcash_sign_pczt(self, address_n, actions, account=None,
+                        total_amount=0, fee=0, branch_id=0x37519621,
+                        header_digest=None, transparent_digest=None,
+                        sapling_digest=None, orchard_digest=None,
+                        orchard_flags=None, orchard_value_balance=None,
+                        orchard_anchor=None):
+        """Sign a Zcash Orchard shielded transaction via PCZT protocol.
+
+        Sends ZcashSignPCZT, then loops on ZcashPCZTActionAck feeding
+        actions one at a time, until the device returns ZcashSignedPCZT.
+
+        Args:
+            address_n: ZIP-32 derivation path [32', 133', account']
+            actions: list of dicts, each with keys matching ZcashPCZTAction fields
+            account: account index (default: derived from address_n[2])
+            total_amount: total ZEC in zatoshis (for display)
+            fee: fee in zatoshis (for display)
+            branch_id: consensus branch ID (default NU5)
+            header_digest: 32-byte header digest (enables on-device sighash)
+            transparent_digest: 32-byte transparent digest
+            sapling_digest: 32-byte sapling digest
+            orchard_digest: 32-byte orchard digest
+            orchard_flags: bundle flags byte (enables digest verification)
+            orchard_value_balance: signed i64 value balance
+            orchard_anchor: 32-byte anchor
+
+        Returns:
+            ZcashSignedPCZT with .signatures list and optional .txid
+        """
+        n_actions = len(actions)
+        if n_actions == 0:
+            raise ValueError("Must have at least one action")
+
+        # Build the initial signing request — only send address_n,
+        # let firmware derive account from the path. Only set account
+        # explicitly if the caller passed it.
+        kwargs = dict(
+            address_n=address_n,
+            n_actions=n_actions,
+            total_amount=total_amount,
+            fee=fee,
+            branch_id=branch_id,
+        )
+        if account is not None:
+            kwargs['account'] = account
+        if header_digest is not None:
+            kwargs['header_digest'] = header_digest
+        if transparent_digest is not None:
+            kwargs['transparent_digest'] = transparent_digest
+        if sapling_digest is not None:
+            kwargs['sapling_digest'] = sapling_digest
+        if orchard_digest is not None:
+            kwargs['orchard_digest'] = orchard_digest
+        if orchard_flags is not None:
+            kwargs['orchard_flags'] = orchard_flags
+        if orchard_value_balance is not None:
+            kwargs['orchard_value_balance'] = orchard_value_balance
+        if orchard_anchor is not None:
+            kwargs['orchard_anchor'] = orchard_anchor
+
+        resp = self.call(zcash_proto.ZcashSignPCZT(**kwargs))
+
+        # Ack loop: device asks for actions one at a time
+        while isinstance(resp, zcash_proto.ZcashPCZTActionAck):
+            idx = resp.next_index
+            if idx >= n_actions:
+                raise Exception(
+                    "Device requested action index %d but only %d actions provided"
+                    % (idx, n_actions))
+            action = actions[idx]
+            resp = self.call(zcash_proto.ZcashPCZTAction(index=idx, **action))
+
+        if isinstance(resp, proto.Failure):
+            raise Exception("Zcash signing failed: %s" % resp.message)
+
+        if not isinstance(resp, zcash_proto.ZcashSignedPCZT):
+            raise Exception("Unexpected response type: %s" % type(resp))
+
+        return resp
 
 class KeepKeyClient(ProtocolMixin, TextUIMixin, BaseClient):
     pass
