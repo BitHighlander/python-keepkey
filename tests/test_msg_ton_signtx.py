@@ -8,6 +8,12 @@
 
 import pytest
 import unittest
+
+try:
+    from keepkeylib import messages_pb2 as _msgs
+    _has_ton = hasattr(_msgs, 'TonGetAddress')
+except Exception:
+    _has_ton = False
 import common
 import binascii
 import struct
@@ -50,6 +56,7 @@ def make_ton_address(workchain=0, hash_bytes=None, bounceable=True, testnet=Fals
     return base64.b64encode(raw).decode('ascii')
 
 
+@unittest.skipUnless(_has_ton, "TON protobuf messages not available in this build")
 class TestMsgTonSignTx(common.KeepKeyTest):
 
     def test_ton_get_address(self):

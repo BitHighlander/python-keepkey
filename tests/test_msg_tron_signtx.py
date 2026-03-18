@@ -8,6 +8,12 @@
 
 import pytest
 import unittest
+
+try:
+    from keepkeylib import messages_pb2 as _msgs
+    _has_tron = hasattr(_msgs, 'TronGetAddress')
+except Exception:
+    _has_tron = False
 import common
 import binascii
 import struct
@@ -18,6 +24,7 @@ from keepkeylib.client import CallException
 from keepkeylib.tools import parse_path
 
 
+@unittest.skipUnless(_has_tron, "TRON protobuf messages not available in this build")
 class TestMsgTronSignTx(common.KeepKeyTest):
 
     def test_tron_get_address(self):
