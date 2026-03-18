@@ -515,8 +515,7 @@ class TestEthereumClearSigning(common.KeepKeyTest):
 
     def test_no_metadata_then_sign_unchanged(self):
         """No metadata sent → EthereumSignTx works as before (backwards compat)."""
-        # Just sign a simple ETH transfer (no contract data)
-        self.setup_mnemonic_nopin_nopassphrase()
+        # Device already initialized by setUp()
         sig_v, sig_r, sig_s = self.client.ethereum_sign_tx(
             n=parse_path("44'/60'/0'/0/0"),
             nonce=0,
