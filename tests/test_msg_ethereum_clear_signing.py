@@ -277,7 +277,7 @@ class TestVectorCatalog:
 
     @staticmethod
     def wrong_key_id():
-        """Adversarial: key_id=1 but only slot 0 has a key."""
+        """Adversarial: key_id=2 — slot 2 is empty (0x00)."""
         payload = serialize_metadata(
             chain_id=1,
             contract_address=AAVE_V3_POOL,
@@ -285,10 +285,10 @@ class TestVectorCatalog:
             tx_hash=ZERO_TX_HASH,
             method_name='supply',
             args=DEFAULT_ARGS,
-            key_id=1,  # Slot 1 is empty (0x00)
+            key_id=2,  # Slot 2 is empty (0x00)
         )
         blob = sign_metadata(payload)
-        return blob, CLASSIFICATION_MALFORMED, 'Empty key slot (key_id=1)'
+        return blob, CLASSIFICATION_MALFORMED, 'Empty key slot (key_id=2)'
 
     @staticmethod
     def extra_trailing_bytes():
@@ -419,7 +419,7 @@ class TestEthereumClearSigning(common.KeepKeyTest):
         resp = self.client.ethereum_send_tx_metadata(
             signed_payload=blob,
             metadata_version=1,
-            key_id=0,
+            key_id=1,
         )
         self.assertEqual(resp.classification, expected)
 
@@ -429,7 +429,7 @@ class TestEthereumClearSigning(common.KeepKeyTest):
         resp = self.client.ethereum_send_tx_metadata(
             signed_payload=blob,
             metadata_version=1,
-            key_id=0,
+            key_id=1,
         )
         self.assertEqual(resp.classification, expected)
 
@@ -439,7 +439,7 @@ class TestEthereumClearSigning(common.KeepKeyTest):
         resp = self.client.ethereum_send_tx_metadata(
             signed_payload=blob,
             metadata_version=1,
-            key_id=0,
+            key_id=1,
         )
         self.assertEqual(resp.classification, expected)
 
@@ -449,7 +449,7 @@ class TestEthereumClearSigning(common.KeepKeyTest):
         resp = self.client.ethereum_send_tx_metadata(
             signed_payload=blob,
             metadata_version=1,
-            key_id=0,
+            key_id=1,
         )
         self.assertEqual(resp.classification, expected)
 
@@ -459,7 +459,7 @@ class TestEthereumClearSigning(common.KeepKeyTest):
         resp = self.client.ethereum_send_tx_metadata(
             signed_payload=blob,
             metadata_version=1,
-            key_id=0,
+            key_id=1,
         )
         self.assertEqual(resp.classification, expected)
 
@@ -469,7 +469,7 @@ class TestEthereumClearSigning(common.KeepKeyTest):
         resp = self.client.ethereum_send_tx_metadata(
             signed_payload=blob,
             metadata_version=1,
-            key_id=0,
+            key_id=1,
         )
         self.assertEqual(resp.classification, expected)
 
@@ -479,7 +479,7 @@ class TestEthereumClearSigning(common.KeepKeyTest):
         resp = self.client.ethereum_send_tx_metadata(
             signed_payload=blob,
             metadata_version=1,
-            key_id=0,
+            key_id=1,
         )
         self.assertEqual(resp.classification, expected)
 
@@ -489,7 +489,7 @@ class TestEthereumClearSigning(common.KeepKeyTest):
         resp = self.client.ethereum_send_tx_metadata(
             signed_payload=blob,
             metadata_version=1,
-            key_id=0,
+            key_id=1,
         )
         self.assertEqual(resp.classification, expected)
 
@@ -499,17 +499,17 @@ class TestEthereumClearSigning(common.KeepKeyTest):
         resp = self.client.ethereum_send_tx_metadata(
             signed_payload=blob,
             metadata_version=1,
-            key_id=0,
+            key_id=1,
         )
         self.assertEqual(resp.classification, expected)
 
     def test_empty_key_slot_returns_malformed(self):
-        """key_id=1 (empty slot) → MALFORMED."""
+        """key_id=2 (empty slot) → MALFORMED."""
         blob, expected, desc = TestVectorCatalog.wrong_key_id()
         resp = self.client.ethereum_send_tx_metadata(
             signed_payload=blob,
             metadata_version=1,
-            key_id=1,
+            key_id=2,
         )
         self.assertEqual(resp.classification, expected)
 

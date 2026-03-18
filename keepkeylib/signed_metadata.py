@@ -39,7 +39,12 @@ CLASSIFICATION_MALFORMED = 2
 # sshMessageSign() code path (SHA256 + secp256k1, no prefix).
 # Users interact with host + path only.
 
-TEST_MNEMONIC = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
+# Test mnemonic — loaded from INSIGHT_MNEMONIC env var, or falls back to
+# the standard BIP-39 test vector. CI uses the test vector; production
+# signing uses the env var which is never committed to source.
+import os as _os
+TEST_MNEMONIC = _os.environ.get('INSIGHT_MNEMONIC',
+    'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about')
 
 # Identity fields — must match pioneer-insight keygen exactly
 INSIGHT_IDENTITY = {
@@ -269,11 +274,13 @@ def build_test_metadata(
     tx_hash=None,
     method_name='supply',
     args=None,
+    key_id=1,
     **kwargs,
 ) -> bytes:
     """Convenience: build a complete signed test metadata blob.
 
     Defaults to an Aave V3 supply() call on Ethereum mainnet.
+    Uses key_id=1 (CI test slot) by default.
     """
     if contract_address is None:
         contract_address = bytes.fromhex('7d2768de32b0b80b7a3454c06bdac94a69ddc7a9')
