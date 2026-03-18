@@ -409,6 +409,10 @@ class TestSerializerUnit(unittest.TestCase):
 class TestEthereumClearSigning(common.KeepKeyTest):
     """Device integration tests for EVM clear signing."""
 
+    def setUp(self):
+        super().setUp()
+        self.setup_mnemonic_nopin_nopassphrase()
+
     def test_valid_metadata_returns_verified(self):
         """Send valid signed metadata → device returns VERIFIED."""
         blob, expected, desc = TestVectorCatalog.valid_aave_supply()
