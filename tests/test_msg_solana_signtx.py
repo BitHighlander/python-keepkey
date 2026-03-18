@@ -12,7 +12,7 @@ import common
 import binascii
 import struct
 
-from keepkeylib import messages_pb2 as messages
+from keepkeylib import messages_solana_pb2 as messages
 from keepkeylib import types_pb2 as types
 from keepkeylib.client import CallException
 from keepkeylib.tools import parse_path

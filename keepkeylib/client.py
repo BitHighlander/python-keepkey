@@ -45,6 +45,7 @@ from . import messages_ripple_pb2 as ripple_proto
 from . import messages_tendermint_pb2 as tendermint_proto
 from . import messages_thorchain_pb2 as thorchain_proto
 from . import messages_mayachain_pb2 as mayachain_proto
+from . import messages_solana_pb2 as solana_proto
 from . import types_pb2 as types
 from . import eos
 from . import nano
@@ -820,6 +821,34 @@ class ProtocolMixin(object):
             link_recipient_n=link_recipient_n,
             representative=representative,
             balance=nano.encode_balance(balance),
+        )
+        return self.call(msg)
+
+    @expect(solana_proto.SolanaAddress)
+    def solana_get_address(self, address_n, show_display=False, coin_name='Solana'):
+        msg = solana_proto.SolanaGetAddress(
+            coin_name=coin_name,
+            address_n=address_n,
+            show_display=show_display)
+        return self.call(msg)
+
+    @expect(solana_proto.SolanaSignedTx)
+    def solana_sign_tx(self, address_n, raw_tx, token_info=None, coin_name='Solana'):
+        msg = solana_proto.SolanaSignTx(
+            coin_name=coin_name,
+            address_n=address_n,
+            raw_tx=raw_tx,
+            token_info=token_info or [],
+        )
+        return self.call(msg)
+
+    @expect(solana_proto.SolanaMessageSignature)
+    def solana_sign_message(self, address_n, message, show_display=False, coin_name='Solana'):
+        msg = solana_proto.SolanaSignMessage(
+            coin_name=coin_name,
+            address_n=address_n,
+            message=message,
+            show_display=show_display,
         )
         return self.call(msg)
 
