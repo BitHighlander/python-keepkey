@@ -314,6 +314,7 @@ def build_test_metadata(
         tx_hash=tx_hash,
         method_name=method_name,
         args=args,
+        key_id=key_id,
         **kwargs,
     )
     return sign_metadata(payload)
