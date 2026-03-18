@@ -421,7 +421,7 @@ class TestEthereumClearSigning(common.KeepKeyTest):
             metadata_version=1,
             key_id=0,
         )
-        self.assertEqual(resp.classification, expected, desc)
+        self.assertEqual(resp.classification, expected)
 
     def test_wrong_key_returns_malformed(self):
         """Metadata signed with wrong key → MALFORMED."""
@@ -431,7 +431,7 @@ class TestEthereumClearSigning(common.KeepKeyTest):
             metadata_version=1,
             key_id=0,
         )
-        self.assertEqual(resp.classification, expected, desc)
+        self.assertEqual(resp.classification, expected)
 
     def test_tampered_method_returns_malformed(self):
         """Tampered method name → signature invalid → MALFORMED."""
@@ -441,7 +441,7 @@ class TestEthereumClearSigning(common.KeepKeyTest):
             metadata_version=1,
             key_id=0,
         )
-        self.assertEqual(resp.classification, expected, desc)
+        self.assertEqual(resp.classification, expected)
 
     def test_tampered_contract_returns_malformed(self):
         """Tampered contract address → MALFORMED."""
@@ -451,7 +451,7 @@ class TestEthereumClearSigning(common.KeepKeyTest):
             metadata_version=1,
             key_id=0,
         )
-        self.assertEqual(resp.classification, expected, desc)
+        self.assertEqual(resp.classification, expected)
 
     def test_zero_signature_returns_malformed(self):
         """All-zero signature → MALFORMED."""
@@ -461,7 +461,7 @@ class TestEthereumClearSigning(common.KeepKeyTest):
             metadata_version=1,
             key_id=0,
         )
-        self.assertEqual(resp.classification, expected, desc)
+        self.assertEqual(resp.classification, expected)
 
     def test_truncated_payload_returns_malformed(self):
         """Truncated payload → MALFORMED."""
@@ -471,7 +471,7 @@ class TestEthereumClearSigning(common.KeepKeyTest):
             metadata_version=1,
             key_id=0,
         )
-        self.assertEqual(resp.classification, expected, desc)
+        self.assertEqual(resp.classification, expected)
 
     def test_empty_payload_returns_malformed(self):
         """Empty payload → MALFORMED."""
@@ -481,7 +481,7 @@ class TestEthereumClearSigning(common.KeepKeyTest):
             metadata_version=1,
             key_id=0,
         )
-        self.assertEqual(resp.classification, expected, desc)
+        self.assertEqual(resp.classification, expected)
 
     def test_wrong_version_returns_malformed(self):
         """Version != 0x01 → MALFORMED."""
@@ -491,7 +491,7 @@ class TestEthereumClearSigning(common.KeepKeyTest):
             metadata_version=1,
             key_id=0,
         )
-        self.assertEqual(resp.classification, expected, desc)
+        self.assertEqual(resp.classification, expected)
 
     def test_extra_trailing_bytes_returns_malformed(self):
         """Extra bytes appended → parse fails (cursor != end) → MALFORMED."""
@@ -501,7 +501,7 @@ class TestEthereumClearSigning(common.KeepKeyTest):
             metadata_version=1,
             key_id=0,
         )
-        self.assertEqual(resp.classification, expected, desc)
+        self.assertEqual(resp.classification, expected)
 
     def test_empty_key_slot_returns_malformed(self):
         """key_id=1 (empty slot) → MALFORMED."""
@@ -511,7 +511,7 @@ class TestEthereumClearSigning(common.KeepKeyTest):
             metadata_version=1,
             key_id=1,
         )
-        self.assertEqual(resp.classification, expected, desc)
+        self.assertEqual(resp.classification, expected)
 
     def test_no_metadata_then_sign_unchanged(self):
         """No metadata sent → EthereumSignTx works as before (backwards compat)."""
