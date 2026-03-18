@@ -419,7 +419,7 @@ class TestEthereumClearSigning(common.KeepKeyTest):
         resp = self.client.ethereum_send_tx_metadata(
             signed_payload=blob,
             metadata_version=1,
-            key_id=1,
+            key_id=3,
         )
         self.assertEqual(resp.classification, expected)
 
@@ -429,7 +429,7 @@ class TestEthereumClearSigning(common.KeepKeyTest):
         resp = self.client.ethereum_send_tx_metadata(
             signed_payload=blob,
             metadata_version=1,
-            key_id=1,
+            key_id=3,
         )
         self.assertEqual(resp.classification, expected)
 
@@ -439,7 +439,7 @@ class TestEthereumClearSigning(common.KeepKeyTest):
         resp = self.client.ethereum_send_tx_metadata(
             signed_payload=blob,
             metadata_version=1,
-            key_id=1,
+            key_id=3,
         )
         self.assertEqual(resp.classification, expected)
 
@@ -449,7 +449,7 @@ class TestEthereumClearSigning(common.KeepKeyTest):
         resp = self.client.ethereum_send_tx_metadata(
             signed_payload=blob,
             metadata_version=1,
-            key_id=1,
+            key_id=3,
         )
         self.assertEqual(resp.classification, expected)
 
@@ -459,7 +459,7 @@ class TestEthereumClearSigning(common.KeepKeyTest):
         resp = self.client.ethereum_send_tx_metadata(
             signed_payload=blob,
             metadata_version=1,
-            key_id=1,
+            key_id=3,
         )
         self.assertEqual(resp.classification, expected)
 
@@ -469,7 +469,7 @@ class TestEthereumClearSigning(common.KeepKeyTest):
         resp = self.client.ethereum_send_tx_metadata(
             signed_payload=blob,
             metadata_version=1,
-            key_id=1,
+            key_id=3,
         )
         self.assertEqual(resp.classification, expected)
 
@@ -479,7 +479,7 @@ class TestEthereumClearSigning(common.KeepKeyTest):
         resp = self.client.ethereum_send_tx_metadata(
             signed_payload=blob,
             metadata_version=1,
-            key_id=1,
+            key_id=3,
         )
         self.assertEqual(resp.classification, expected)
 
@@ -489,7 +489,7 @@ class TestEthereumClearSigning(common.KeepKeyTest):
         resp = self.client.ethereum_send_tx_metadata(
             signed_payload=blob,
             metadata_version=1,
-            key_id=1,
+            key_id=3,
         )
         self.assertEqual(resp.classification, expected)
 
@@ -499,7 +499,7 @@ class TestEthereumClearSigning(common.KeepKeyTest):
         resp = self.client.ethereum_send_tx_metadata(
             signed_payload=blob,
             metadata_version=1,
-            key_id=1,
+            key_id=3,
         )
         self.assertEqual(resp.classification, expected)
 

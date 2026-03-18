@@ -274,7 +274,7 @@ def build_test_metadata(
     tx_hash=None,
     method_name='supply',
     args=None,
-    key_id=1,
+    key_id=3,  # Slot 3: CI test key (DEBUG_LINK builds only)
     **kwargs,
 ) -> bytes:
     """Convenience: build a complete signed test metadata blob.
