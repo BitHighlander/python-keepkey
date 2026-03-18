@@ -17,11 +17,14 @@ Test key: private=0x01 (secp256k1 generator point G) — NEVER use in production
 import unittest
 import hashlib
 import struct
-import common
 
-from keepkeylib.client import KeepKeyClient
-from keepkeylib import messages_pb2 as proto
-from keepkeylib import messages_ethereum_pb2 as eth_proto
+try:
+    import common
+except ImportError:
+    import sys, os
+    sys.path.insert(0, os.path.dirname(__file__))
+    import common
+
 from keepkeylib.signed_metadata import (
     serialize_metadata,
     sign_metadata,
@@ -338,8 +341,9 @@ class TestSerializerUnit(unittest.TestCase):
     def test_signed_blob_has_correct_structure(self):
         """Signed blob = payload + sig(64) + recovery(1)."""
         blob = build_test_metadata(args=[])
-        # payload = 71, blob = 71 + 64 + 1 = 136
-        self.assertEqual(len(blob), 136)
+        # payload = 1+4+20+4+32+2+6("supply")+1+1+4+1 = 76
+        # blob = 76 + 64(sig) + 1(recovery) = 141
+        self.assertEqual(len(blob), 141)
 
     def test_version_byte(self):
         blob = build_test_metadata()
