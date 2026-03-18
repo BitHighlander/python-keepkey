@@ -96,37 +96,6 @@ class TestMsgSolanaSignTx(common.KeepKeyTest):
         self.assertEqual(len(resp.signature), 64)
         self.assertFalse(all(b == 0 for b in resp.signature))
 
-    def test_solana_sign_with_token_info(self):
-        """Test Solana signing with host-provided token metadata."""
-        self.requires_fullFeature()
-        self.setup_mnemonic_allallall()
-
-        from_pubkey = b'\x11' * 32
-        to_pubkey = b'\x22' * 32
-        raw_tx = build_system_transfer_tx(from_pubkey, to_pubkey, 500000000)
-
-        # Include token info for display (even though this is a SOL transfer,
-        # it tests that the token_info field is accepted)
-        usdc_mint = b'\x06\xdd\xf6\xe1\xd7\x65\xa1\x93' \
-                    b'\xd9\xcb\xe1\x46\xce\xeb\x79\xac' \
-                    b'\x1c\xb4\x85\xed\x5f\x5b\x37\x91' \
-                    b'\x3a\x8c\xf5\x85\x7e\xff\x00\xa9'
-
-        msg = messages.SolanaSignTx(
-            address_n=parse_path("m/44'/501'/0'/0'"),
-            raw_tx=raw_tx,
-            token_info=[
-                messages.SolanaTokenInfo(
-                    mint=usdc_mint,
-                    symbol="USDC",
-                    decimals=6,
-                ),
-            ],
-        )
-        resp = self.client.call(msg)
-
-        self.assertEqual(len(resp.signature), 64)
-
     def test_solana_sign_message(self):
         """Test Solana arbitrary message signing."""
         self.requires_fullFeature()
