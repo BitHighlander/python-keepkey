@@ -19,6 +19,8 @@ from keepkeylib import messages_pb2 as proto
 from keepkeylib import messages_zcash_pb2 as zcash_proto
 from keepkeylib import types_pb2 as types
 
+# Check if the proto has transparent shielding messages (requires updated pb2)
+_HAS_TRANSPARENT = hasattr(zcash_proto, 'ZcashTransparentInput')
 
 # Zcash BIP44 path: m/44'/133'/0'/0/0
 ZEC_PATH = [0x80000000 + 44, 0x80000000 + 133, 0x80000000, 0, 0]
@@ -26,6 +28,8 @@ ZEC_PATH = [0x80000000 + 44, 0x80000000 + 133, 0x80000000, 0, 0]
 ORCHARD_PATH = [0x80000000 + 32, 0x80000000 + 133, 0x80000000]
 
 
+@unittest.skipUnless(_HAS_TRANSPARENT,
+    "ZcashTransparentInput not in pb2 — regenerate proto bindings from updated device-protocol")
 class TestZcashTransparentShielding(common.KeepKeyTest):
     """Test transparent-to-Orchard hybrid signing protocol."""
 
