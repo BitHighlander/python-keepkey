@@ -1703,6 +1703,80 @@ class ProtocolMixin(object):
 
         return resp
 
+    def zcash_sign_pczt_hybrid(self, address_n, actions, transparent_inputs,
+                               account=None, total_amount=0, fee=0,
+                               branch_id=0x37519621, **kwargs):
+        """Sign a hybrid Zcash shielding transaction (transparent + Orchard).
+
+        Sends ZcashSignPCZT with n_transparent_inputs, then:
+        1. For each transparent input: send ZcashTransparentInput, receive ZcashTransparentSig
+        2. For each Orchard action: send ZcashPCZTAction, receive ZcashPCZTActionAck/ZcashSignedPCZT
+
+        Args:
+            address_n: ZIP-32 derivation path [32', 133', account']
+            actions: list of Orchard action dicts
+            transparent_inputs: list of dicts with keys: index, sighash, address_n, amount
+            account, total_amount, fee, branch_id: same as zcash_sign_pczt
+            **kwargs: forwarded to ZcashSignPCZT (digests, etc.)
+
+        Returns:
+            (ZcashSignedPCZT, list of DER signatures for transparent inputs)
+        """
+        n_actions = len(actions)
+        n_tinputs = len(transparent_inputs)
+
+        init_kwargs = dict(
+            address_n=address_n,
+            n_actions=n_actions,
+            n_transparent_inputs=n_tinputs,
+            total_amount=total_amount,
+            fee=fee,
+            branch_id=branch_id,
+        )
+        if account is not None:
+            init_kwargs['account'] = account
+        init_kwargs.update(kwargs)
+
+        resp = self.call(zcash_proto.ZcashSignPCZT(**init_kwargs))
+
+        # Phase 1: transparent inputs
+        transparent_sigs = []
+        for i in range(n_tinputs):
+            if not isinstance(resp, zcash_proto.ZcashPCZTActionAck):
+                raise Exception("Expected ActionAck for transparent input %d, got %s"
+                                % (i, type(resp).__name__))
+            tinput = transparent_inputs[i]
+            resp = self.call(zcash_proto.ZcashTransparentInput(
+                index=tinput['index'],
+                sighash=tinput['sighash'],
+                address_n=tinput['address_n'],
+                amount=tinput.get('amount', 0),
+            ))
+            if isinstance(resp, proto.Failure):
+                raise Exception("Transparent input %d failed: %s" % (i, resp.message))
+            if not isinstance(resp, zcash_proto.ZcashTransparentSig):
+                raise Exception("Expected TransparentSig, got %s" % type(resp).__name__)
+            transparent_sigs.append(resp.signature)
+
+        # Phase 2: Orchard actions
+        # After last transparent sig, we need to send the first action directly
+        for i in range(n_actions):
+            if i > 0 or n_tinputs == 0:
+                if not isinstance(resp, zcash_proto.ZcashPCZTActionAck):
+                    if isinstance(resp, zcash_proto.ZcashSignedPCZT):
+                        return resp, transparent_sigs
+                    raise Exception("Expected ActionAck for action %d, got %s"
+                                    % (i, type(resp).__name__))
+            action = actions[i]
+            resp = self.call(zcash_proto.ZcashPCZTAction(index=i, **action))
+
+        if isinstance(resp, proto.Failure):
+            raise Exception("Zcash signing failed: %s" % resp.message)
+        if not isinstance(resp, zcash_proto.ZcashSignedPCZT):
+            raise Exception("Unexpected final response: %s" % type(resp).__name__)
+
+        return resp, transparent_sigs
+
 class KeepKeyClient(ProtocolMixin, TextUIMixin, BaseClient):
     pass
 
