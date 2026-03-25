@@ -58,7 +58,8 @@ CHAIN_MAP = {
         'ton',
     ]),
     'Z': ('Zcash', '#F4B728', [
-        'zcash', 'signtx_zcash',
+        'zcash', 'signtx_zcash', 'zcash_orchard', 'zcash_sign_pczt',
+        'zcash_nu6', 'zcash_v5', 'zcash_complete',
     ]),
     'R': ('Ripple (XRP)', '#23292F', [
         'ripple',
@@ -167,12 +168,56 @@ def img_to_data_uri(path):
         return f'data:image/png;base64,{base64.b64encode(f.read()).decode()}'
 
 
-def is_blank(path):
-    """Check if screenshot is mostly blank (< 50 white pixels)."""
+# Hash-based dedup: track how many tests contain each frame hash.
+# Frames that appear in 10+ distinct tests are setUp noise (splash/recovery).
+_SEEN_HASHES: dict = {}
+_SETUP_HASHES: set = set()
+
+
+def _img_hash(data: bytes) -> str:
+    import hashlib
+    return hashlib.md5(data).hexdigest()
+
+
+def is_blank_or_setup(path):
+    """Filter out blank screens, setUp noise, and duplicate splash frames.
+
+    Filtered:
+    - Nearly-blank frames (< 3% lit pixels)
+    - KeepKey logo splash / recovery import screens (appear 10+ times across
+      tests, identified by hash-based cross-test dedup — bug #11/#16)
+    """
     try:
         data = open(path, 'rb').read()
-        return len(data) < 400
-    except:
+        if len(data) < 400:
+            return True
+
+        h = _img_hash(data)
+        if h in _SETUP_HASHES:
+            return True
+
+        try:
+            from PIL import Image
+            import io
+            im = Image.open(io.BytesIO(data))
+            if im.size != (256, 64):
+                return False
+            pixels = list(im.getdata())
+            lit = sum(1 for p in pixels if (p[0] + p[1] + p[2]) > 30)
+            total = 256 * 64
+            if lit < total * 0.03:
+                _SETUP_HASHES.add(h)
+                return True
+            # Cross-test dedup: frames seen in 10+ tests are setUp screens
+            count = _SEEN_HASHES.get(h, 0) + 1
+            _SEEN_HASHES[h] = count
+            if count >= 10:
+                _SETUP_HASHES.add(h)
+                return True
+        except ImportError:
+            pass
+        return False
+    except Exception:
         return True
 
 
@@ -289,8 +334,11 @@ def generate_html(screenshots, junit_results, output_path):
                 status_class = 'pass' if result == 'PASS' else 'fail' if result in ('FAIL', 'ERROR') else ''
                 badge_class = 'pass' if result == 'PASS' else 'fail' if result in ('FAIL', 'ERROR') else 'skip'
 
-                # Filter out blank screens for cleaner display
-                interesting = [(i, p) for i, p in enumerate(pngs) if not is_blank(p)]
+                # Filter out blank/setUp screens; cap Bitcoin at 8 frames
+                # to prevent BTC signtx tests from dominating the report (bug #18)
+                interesting = [(i, p) for i, p in enumerate(pngs) if not is_blank_or_setup(p)]
+                if letter == 'B' and len(interesting) > 8:
+                    interesting = interesting[:8]
 
                 html.append(f"""
   <div class="test-card {status_class}">
