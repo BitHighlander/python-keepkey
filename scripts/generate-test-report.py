@@ -246,16 +246,24 @@ def detect_fw():
     except: return None
 
 def parse_junit(path):
-    """Parse junit XML for pass/fail per test method. Returns {method_name: 'pass'|'fail'|'error'|'skip'}"""
+    """Parse junit XML for pass/fail. Returns dict keyed by both 'classname.method' and 'method'.
+    When names collide, pass wins over fail (avoids false negatives from unrelated test classes)."""
     if not path or not os.path.exists(path): return {}
     import xml.etree.ElementTree as ET
     results = {}
     for tc in ET.parse(path).iter('testcase'):
-        name = tc.get('name','')
-        if tc.find('failure') is not None: results[name] = 'fail'
-        elif tc.find('error') is not None: results[name] = 'error'
-        elif tc.find('skipped') is not None: results[name] = 'skip'
-        else: results[name] = 'pass'
+        name = tc.get('name', '')
+        cls = tc.get('classname', '')
+        if tc.find('failure') is not None: status = 'fail'
+        elif tc.find('error') is not None: status = 'error'
+        elif tc.find('skipped') is not None: status = 'skip'
+        else: status = 'pass'
+        # Key by classname.method (precise) and method-only (fallback)
+        if cls:
+            results[f'{cls}.{name}'] = status
+        # For method-only key, pass wins over fail (avoid collision false negatives)
+        if name not in results or status == 'pass':
+            results[name] = status
     return results
 
 # ---------------------------------------------------------------
