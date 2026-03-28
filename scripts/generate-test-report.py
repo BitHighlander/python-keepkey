@@ -830,6 +830,40 @@ SECTIONS = [
           'Empty tx rejected', 'Zero-length transaction data is refused.', []),
          ('S7', 'test_msg_solana_signtx', 'test_solana_sign_deterministic',
           'Deterministic signing', 'Same tx always produces same signature.', []),
+         ('S8', 'test_msg_solana_signtx', 'test_solana_sign_token_transfer',
+          'SPL Token transfer (clear-sign)',
+          'Device parses SPL Token Transfer instruction and shows "Send N tokens to [address]" on OLED. '
+          'The token amount and destination are displayed in human-readable form.',
+          ['Token transfer amount + address']),
+         ('S9', 'test_msg_solana_signtx', 'test_solana_sign_token_approve',
+          'SPL Token approve',
+          'Device shows "Approve N tokens to [delegate]". Approval allows another account to spend '
+          'tokens on behalf of the owner — a critical operation that must be explicitly confirmed.',
+          ['Token approval']),
+         ('S10', 'test_msg_solana_signtx', 'test_solana_sign_stake_delegate',
+          'Stake delegate',
+          'Device shows "Delegate stake?" on OLED. Staking delegates SOL to a validator to earn '
+          'rewards. The user must confirm the delegation.',
+          ['Delegate stake']),
+         ('S11', 'test_msg_solana_signtx', 'test_solana_sign_stake_withdraw',
+          'Stake withdraw',
+          'Device shows "Withdraw [amount] from stake?" with the SOL amount. Unstaking withdraws '
+          'SOL from a validator after the cooldown period.',
+          ['Withdraw stake']),
+         ('S12', 'test_msg_solana_signtx', 'test_solana_sign_stake_deactivate',
+          'Stake deactivate',
+          'Device shows "Deactivate stake?" — begins the cooldown period before SOL can be withdrawn.',
+          ['Deactivate stake']),
+         ('S13', 'test_msg_solana_signtx', 'test_solana_sign_compute_budget_unit_price',
+          'Compute Budget: set priority fee',
+          'Device shows "Set compute unit price to N microlamports?" — this is the Solana priority '
+          'fee (similar to Ethereum gas price). Users set this to get faster transaction inclusion.',
+          ['Priority fee']),
+         ('S14', 'test_msg_solana_signtx', 'test_solana_sign_memo',
+          'Memo program',
+          'Device shows "Memo attached" with the memo text. Memos are used for exchange deposit tags, '
+          'payment references, and on-chain notes.',
+          ['Memo text']),
      ]),
 
     ('T', 'TRON', '7.14.0',
