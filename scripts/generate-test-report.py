@@ -834,6 +834,35 @@ SECTIONS = [
           'Compute budget unit price',
           'Set priority fee for transaction. OLED shows compute unit price.',
           ['Unit price']),
+         ('S12', 'test_msg_solana_signtx', 'test_solana_sign_token_approve',
+          'SPL Token approve',
+          'Approve delegate to spend tokens. OLED shows approval amount and delegate address.',
+          ['Token approval']),
+         ('S13', 'test_msg_solana_signtx', 'test_solana_sign_stake_withdraw',
+          'Stake withdraw',
+          'Withdraw SOL from stake account. OLED shows withdrawal amount.',
+          ['Withdraw amount']),
+         ('S14', 'test_msg_solana_signtx', 'test_solana_sign_stake_deactivate',
+          'Stake deactivate',
+          'Begin cooldown period for staked SOL. OLED shows "Deactivate stake?"',
+          ['Deactivate']),
+         ('S15', 'test_msg_solana_getaddress', 'test_solana_show_address',
+          'Show Solana address on OLED',
+          'Full 44-char base58 address with QR code and derivation path displayed on OLED. '
+          'User compares against wallet app to detect address substitution attacks.',
+          ['Solana QR + address']),
+         ('S16', 'test_msg_solana_signtx', 'test_solana_blind_sign_rejected_without_advanced_mode',
+          'Blind-sign REJECTED without AdvancedMode',
+          'Unknown program instruction without AdvancedMode policy returns Failure immediately. '
+          'The device refuses to sign unverified transactions by default — users must explicitly '
+          'enable AdvancedMode to opt in to blind-signing.',
+          ['Policy rejection']),
+         ('S17', 'test_msg_solana_signtx', 'test_solana_blind_sign_allowed_with_advanced_mode',
+          'Blind-sign ALLOWED with AdvancedMode',
+          'With AdvancedMode enabled, OLED shows "BLIND SIGN — Sign unverified Solana transaction? '
+          'The device cannot fully verify the contents." User must explicitly confirm. This is the '
+          'power-user escape hatch for DeFi protocols not yet supported by clear-signing.',
+          ['ENABLE POLICY', 'BLIND SIGN warning', 'Confirmation']),
      ]),
 
     ('T', 'TRON', '7.14.0',

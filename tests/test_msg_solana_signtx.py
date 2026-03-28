@@ -326,6 +326,47 @@ class TestMsgSolanaSignTx(common.KeepKeyTest):
             address_n=parse_path("m/44'/501'/0'/0'"), raw_tx=raw_tx))
         self.assertEqual(len(resp.signature), 64)
 
+    # ================================================================
+    # Blind-sign policy tests — AdvancedMode gate
+    # ================================================================
+
+    def test_solana_blind_sign_rejected_without_advanced_mode(self):
+        """Unknown instruction WITHOUT AdvancedMode policy → Failure.
+        OLED: no screen shown — firmware rejects before any user interaction.
+        This is the default safe behavior: unknown programs cannot be signed."""
+        self.requires_fullFeature()
+        self.requires_message("SolanaSignTx")
+        self.setup_mnemonic_allallall()
+        # Ensure AdvancedMode is OFF
+        self.client.apply_policy('AdvancedMode', False)
+        from_pubkey = self._get_from_pubkey()
+        # Build tx with a completely unknown program ID
+        unknown_program = b'\xEE' * 32
+        instr_data = b'\x01\x02\x03\x04'
+        raw_tx = self._build_tx(from_pubkey, [], unknown_program, instr_data)
+        with pytest.raises(CallException) as exc:
+            self.client.call(messages.SolanaSignTx(
+                address_n=parse_path("m/44'/501'/0'/0'"), raw_tx=raw_tx))
+        self.assertIn("AdvancedMode", str(exc.value))
+
+    def test_solana_blind_sign_allowed_with_advanced_mode(self):
+        """Unknown instruction WITH AdvancedMode policy → "Blind Sign" warning on OLED.
+        User confirms, device signs. This tests the explicit opt-in for power users."""
+        self.requires_fullFeature()
+        self.requires_message("SolanaSignTx")
+        self.setup_mnemonic_allallall()
+        # Enable AdvancedMode
+        self.client.apply_policy('AdvancedMode', True)
+        from_pubkey = self._get_from_pubkey()
+        unknown_program = b'\xEE' * 32
+        instr_data = b'\x01\x02\x03\x04'
+        raw_tx = self._build_tx(from_pubkey, [], unknown_program, instr_data)
+        resp = self.client.call(messages.SolanaSignTx(
+            address_n=parse_path("m/44'/501'/0'/0'"), raw_tx=raw_tx))
+        self.assertEqual(len(resp.signature), 64)
+        # Disable AdvancedMode after test
+        self.client.apply_policy('AdvancedMode', False)
+
 
 if __name__ == '__main__':
     unittest.main()
