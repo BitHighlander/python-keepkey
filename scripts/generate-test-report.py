@@ -807,133 +807,276 @@ SECTIONS = [
      ]),
 
     ('S', 'Solana', '7.14.0',
-     'NEW: Full Solana with Ed25519 (SLIP-10), base58 addresses, 37 instruction types across 7 '
-     'programs. Key security fix: full 44-character address display replaces old 8-char truncation '
-     'that was a spoofing vector.',
+     'NEW: Solana is a high-performance L1 processing 65,000 TPS with sub-second finality and '
+     '$80B+ TVL. It uses Ed25519 (SLIP-10) for key derivation — different from Bitcoin\'s secp256k1. '
+     'Addresses are 44-character base58-encoded public keys. '
+     'SECURITY FIX: Prior firmware truncated Solana addresses to 8 characters on the OLED, creating '
+     'a spoofing vector where two addresses sharing the same prefix were indistinguishable on-device. '
+     '7.14.0 displays the full 44-character address with a QR code so users can verify against their '
+     'wallet application. The OLED confirmation screen shows the derivation path (m/44\'/501\'/0\') '
+     'above the address and a scannable QR code — this is the primary defense against address '
+     'substitution attacks by compromised hosts.',
      [
-         'ADDRESS: m/44\'/501\'/0\' Ed25519 -> full 44-char base58 on OLED',
-         'SIGN TX: Parse instructions -> per-instruction confirmation -> Ed25519 sign',
-         'SIGN MESSAGE: Arbitrary bytes -> hex display -> Ed25519 sign',
+         'ADDRESS: Derive Ed25519 key -> display full 44-char base58 + QR on OLED -> user verifies',
+         'SIGN TX: Parse Solana instructions -> per-instruction confirmation -> Ed25519 sign',
+         'SIGN MESSAGE: Display message text on OLED -> user confirms -> Ed25519 sign',
+         'SECURITY: Full address display prevents truncation spoofing attacks',
      ],
      [
          ('S1', 'test_msg_solana_getaddress', 'test_solana_get_address',
-          'Derive Solana address', 'Full 44-character base58 address displayed on OLED.', ['Full 44-char address']),
+          'Derive Solana address',
+          'Derives Ed25519 public key at m/44\'/501\'/0\'/0\' and encodes as 44-character base58. '
+          'This is the address users share to receive SOL and SPL tokens.',
+          ['Full 44-char address']),
          ('S2', 'test_msg_solana_getaddress', 'test_solana_different_accounts',
-          'Different account indices', 'Verifies different accounts produce different addresses.', []),
+          'Different account indices',
+          'Account isolation: changing the account index must produce a completely different address. '
+          'Prevents cross-account fund confusion.', []),
          ('S3', 'test_msg_solana_getaddress', 'test_solana_deterministic',
-          'Deterministic derivation', 'Same path always produces same address.', []),
+          'Deterministic derivation',
+          'Same seed + path must always produce the same address. Non-deterministic derivation would '
+          'mean the device generates unreachable addresses and funds sent there would be lost.', []),
+         ('S3b', 'test_msg_solana_getaddress', 'test_solana_show_address',
+          'Show Solana address on OLED',
+          'OLED displays full 44-char base58 address with QR code and derivation path. The user '
+          'compares this to their wallet app — this is the primary defense against address substitution '
+          'by a compromised host. If the addresses don\'t match, the host has been tampered with.',
+          ['Solana QR + address']),
          ('S4', 'test_msg_solana_signtx', 'test_solana_sign_system_transfer',
-          'Sign SOL transfer', 'System::Transfer with full address + amount display.', ['SOL amount + address']),
+          'Sign SOL transfer',
+          'System::Transfer instruction. OLED shows recipient address and SOL amount. Device parses '
+          'the Solana instruction format to extract human-readable parameters.',
+          ['SOL amount + address']),
          ('S5', 'test_msg_solana_signtx', 'test_solana_sign_message',
-          'Sign Solana message', 'Arbitrary message signing with Ed25519 key.', ['Message screen']),
+          'Sign Solana message',
+          'OLED shows "SIGN MESSAGE" with the message text. Used for proof-of-ownership and '
+          'authentication. User confirms the message content before the device signs with Ed25519.',
+          ['Message screen']),
          ('S6', 'test_msg_solana_signtx', 'test_solana_sign_empty_rejected',
-          'Empty tx rejected', 'Zero-length transaction data is refused.', []),
+          'Empty tx rejected',
+          'Zero-length transaction data must be refused. An empty transaction could be exploited by '
+          'a malicious host to extract a signature without meaningful user consent.', []),
          ('S7', 'test_msg_solana_signtx', 'test_solana_sign_deterministic',
-          'Deterministic signing', 'Same tx always produces same signature.', []),
+          'Deterministic signing',
+          'Same transaction must always produce the same Ed25519 signature. Non-deterministic signing '
+          'indicates a faulty RNG — a critical security vulnerability.', []),
      ]),
 
     ('T', 'TRON', '7.14.0',
-     'NEW: TRON with protobuf deserialization and reconstruct-then-sign. 13 hardcoded TRC-20 tokens. '
-     'Device reconstructs tx hash from parsed fields (not raw blob) for clear-sign path.',
+     'NEW: TRON is a delegated proof-of-stake blockchain with $8B+ TVL, 230M+ accounts, and the '
+     'largest USDT circulation of any chain. The KeepKey uses a reconstruct-then-sign architecture: '
+     'instead of blindly signing a raw blob, the device deserializes the protobuf transaction, '
+     'reconstructs the tx hash from parsed fields, and displays the recipient address and amount '
+     'in human-readable form. For TRC-20 tokens, the device decodes the ABI transfer(to,amount) '
+     'call and shows the token name from a hardcoded list of 13 major tokens (USDT, USDC, etc.). '
+     'If the transaction uses an unknown contract or raw data, the device falls back to blind-sign '
+     'with a prominent warning on the OLED.',
      [
-         'ADDRESS: m/44\'/195\'/0\'/0/0 -> full 34-char base58 TRON address',
-         'STRUCTURED: Parse fields -> reconstruct hash -> show amount + address -> sign',
+         'ADDRESS: m/44\'/195\'/0\'/0/0 -> full 34-char base58 TRON address + QR',
+         'CLEAR-SIGN: Parse protobuf fields -> reconstruct hash -> show amount + address -> sign',
          'TRC-20: Decode transfer(to,amount) ABI -> show token name + decoded amount',
-         'LEGACY: Raw protobuf -> blind sign warning',
+         'BLIND-SIGN: Raw/unknown data -> prominent warning on OLED -> user must explicitly confirm',
      ],
      [
          ('T1', 'test_msg_tron_getaddress', 'test_tron_get_address',
-          'Derive TRON address', 'Full 34-character base58 address.', ['Full 34-char address']),
+          'Derive TRON address',
+          'Full 34-character base58 address starting with T. TRON uses secp256k1 (same curve as '
+          'Bitcoin) but with a different address encoding scheme.',
+          ['Full 34-char address']),
          ('T2', 'test_msg_tron_getaddress', 'test_tron_different_accounts',
-          'Different accounts', 'Different indices produce different addresses.', []),
+          'Different accounts',
+          'Different derivation indices must produce different addresses. Prevents accidental '
+          'cross-account fund mixing.', []),
          ('T3', 'test_msg_tron_getaddress', 'test_tron_deterministic',
-          'Deterministic derivation', 'Same path always produces same address.', []),
+          'Deterministic derivation',
+          'Same seed + path always produces the same address. Essential for wallet recovery.', []),
+         ('T3b', 'test_msg_tron_getaddress', 'test_tron_show_address',
+          'Show TRON address on OLED',
+          'Displays the full 34-character address with QR code and derivation path on the OLED. '
+          'User compares against their wallet app to detect address substitution attacks.',
+          ['TRON QR + address']),
          ('T4', 'test_msg_tron_signtx', 'test_tron_sign_transfer_structured',
-          'Sign TRX transfer', 'Structured clear-sign with full address display.', ['TRX send']),
+          'Sign TRX transfer (clear-sign)',
+          'Device parses the protobuf TransferContract, reconstructs the transaction hash, and '
+          'shows "Send X TRX to [address]" on OLED. The reconstruction proves the device understood '
+          'the transaction — it\'s not just blindly signing bytes.',
+          ['TRX send']),
          ('T5', 'test_msg_tron_signtx', 'test_tron_sign_transfer_legacy_raw_data',
-          'Sign TRX legacy raw', 'Raw protobuf data triggers blind sign path.', ['Blind sign']),
+          'Sign TRX legacy (blind-sign)',
+          'When raw protobuf data is sent without structured fields, the device cannot parse it. '
+          'OLED shows a "BLIND SIGNATURE" warning. User must explicitly confirm they trust the host.',
+          ['Blind sign']),
          ('T6', 'test_msg_tron_signtx', 'test_tron_sign_trc20_transfer',
-          'Sign TRC-20 token', 'Known token decoded from ABI data.', ['Token + amount']),
+          'Sign TRC-20 token transfer',
+          'The device decodes the ABI-encoded transfer(address,uint256) call, looks up the contract '
+          'address in its hardcoded token list, and shows "Send X [TOKEN] to [address]" — human-readable '
+          'instead of raw hex.',
+          ['Token + amount']),
          ('T7', 'test_msg_tron_signtx', 'test_tron_sign_missing_fields_rejected',
-          'Missing fields rejected', 'Incomplete transaction data is refused.', []),
+          'Missing fields rejected',
+          'If required transaction fields are missing, the device refuses to sign. Prevents signing '
+          'malformed transactions that could lock or burn funds.', []),
      ]),
 
     ('N', 'TON', '7.14.0',
-     'NEW: TON v4r2 wallet contracts. Clear-sign reconstructs cell tree + SHA-256 hash verification. '
-     'Blind-sign for StateInit deploys or hash mismatch. Memo/comment support.',
+     'NEW: The Open Network (TON) was designed by Telegram and uses a unique cell-based architecture '
+     'where transactions are serialized as trees of cells rather than flat byte arrays. TON wallets '
+     'are smart contracts — the most common is v4r2, which the KeepKey reconstructs and verifies. '
+     'For clear-signing, the device rebuilds the v4r2 cell tree from the structured transaction data, '
+     'computes the SHA-256 hash, and compares it to the host-provided hash. If they match, the OLED '
+     'shows "TON Transfer" with recipient, amount, and optional memo. If the hash doesn\'t match or '
+     'the transaction deploys a new contract (StateInit), the device falls back to blind-sign with '
+     'a "BLIND SIGNATURE" warning. Addresses are 48-character base64url-encoded with bounceable/non-bounceable '
+     'variants.',
      [
-         'ADDRESS: m/44\'/607\'/0\' -> full 48-char base64url TON address',
-         'CLEAR-SIGN: Reconstruct v4r2 cell -> SHA-256 match -> show transfer details',
-         'BLIND-SIGN: Hash mismatch or deploy -> "BLIND SIGNATURE" warning',
+         'ADDRESS: m/44\'/607\'/0\' Ed25519 -> full 48-char base64url TON address + QR',
+         'CLEAR-SIGN: Reconstruct v4r2 cell tree -> SHA-256 verify -> show transfer details',
+         'BLIND-SIGN: Hash mismatch or StateInit deploy -> "BLIND SIGNATURE" warning',
+         'MEMO: Optional comment attached to transfer, displayed on OLED before signing',
      ],
      [
          ('N1', 'test_msg_ton_getaddress', 'test_ton_get_address',
-          'Derive TON address', 'Full 48-character base64url address.', ['Full 48-char address']),
+          'Derive TON address',
+          'Full 48-character base64url address. TON uses Ed25519 like Solana but with a completely '
+          'different address encoding (base64url vs base58).',
+          ['Full 48-char address']),
          ('N2', 'test_msg_ton_getaddress', 'test_ton_different_accounts',
-          'Different accounts', 'Different indices produce different addresses.', []),
+          'Different accounts',
+          'Different derivation indices must produce different addresses.', []),
+         ('N2b', 'test_msg_ton_getaddress', 'test_ton_show_address',
+          'Show TON address on OLED',
+          'Displays the full 48-character address with QR code and derivation path. The user verifies '
+          'this matches their wallet application.',
+          ['TON QR + address']),
          ('N3', 'test_msg_ton_getaddress', 'test_ton_address_format',
-          'Address format validation', 'Bounceable/non-bounceable format check.', []),
+          'Address format validation',
+          'TON has bounceable and non-bounceable address variants. Verifies the device produces the '
+          'correct format.', []),
          ('N4', 'test_msg_ton_signtx', 'test_ton_sign_structured',
-          'Sign TON clear-sign', 'Hash verification passes, shows "TON Transfer" with details.', ['TON Transfer']),
-         ('N5', 'test_msg_ton_signtx', 'test_ton_sign_with_comment',
-          'Sign TON with memo', 'Comment displayed before signing.', ['Memo display']),
+          'Sign TON clear-sign',
+          'Device reconstructs the v4r2 cell tree from structured fields, computes SHA-256, and '
+          'verifies it matches the host hash. OLED shows "TON Transfer" with amount and recipient.',
+          ['TON Transfer']),
+         ('N5', 'test_msg_ton_signtx', 'test_ton_sign_with_memo',
+          'Sign TON with memo',
+          'Transfer with an attached comment/memo. The memo text is displayed on OLED before the '
+          'transfer details, giving users context about the payment.',
+          ['Memo display']),
          ('N6', 'test_msg_ton_signtx', 'test_ton_sign_legacy_raw_tx',
-          'Sign TON blind', 'Raw tx without structured fields triggers blind sign.', ['Blind warning']),
+          'Sign TON blind',
+          'When the device receives raw transaction data without structured fields, it cannot verify '
+          'the cell tree. OLED shows "BLIND SIGNATURE" warning — user must explicitly trust the host.',
+          ['Blind warning']),
          ('N7', 'test_msg_ton_signtx', 'test_ton_sign_missing_fields_rejected',
-          'Missing fields rejected', 'Incomplete data refused.', []),
+          'Missing fields rejected',
+          'Incomplete transaction data is refused. Prevents signing malformed transactions.', []),
      ]),
 
     ('Z', 'Zcash Orchard', '7.14.0',
-     'NEW: Shielded transactions via PCZT streaming. Orchard hides sender, recipient, and amount '
-     'using ZK proofs. Raw seed access (ZIP-32 Orchard derivation uses BIP-39 seed + Pallas curve). '
-     'Full Viewing Key (FVK) export for watch-only wallets.',
+     'NEW: Zcash Orchard brings full financial privacy to the KeepKey. Unlike transparent Bitcoin '
+     'transactions where amounts and addresses are public, Orchard uses zero-knowledge proofs '
+     '(Halo2) to hide the sender, recipient, and amount on-chain while still proving the transaction '
+     'is valid. The KeepKey derives Orchard keys using ZIP-32 — a Zcash-specific key derivation '
+     'standard that uses the Pallas elliptic curve (not secp256k1 or Ed25519). Transactions are '
+     'streamed via PCZT (Partially Created Zcash Transaction) format: the host sends the header, '
+     'then each shielded action one at a time. The device confirms each action on the OLED and '
+     'returns RedPallas signatures. Hybrid transactions (transparent BTC-like inputs shielded into '
+     'Orchard outputs) are also supported — the first step toward private Bitcoin-to-Zcash bridges.',
      [
-         'FVK: Derive ak, nk, rivk components via ZIP-32 Orchard path',
-         'PCZT: Stream header -> actions one at a time -> confirm each -> return signatures',
-         'HYBRID: Transparent inputs + Orchard outputs in same tx',
+         'FVK: Derive ak (authorization key), nk (nullifier key), rivk (incoming viewing key)',
+         'PCZT: Stream header -> confirm each action on OLED -> return 64-byte RedPallas signatures',
+         'HYBRID: Transparent inputs (BTC-like UTXOs) shielded into Orchard pool in one transaction',
+         'PRIVACY: Sender, recipient, and amount all hidden on-chain via Halo2 ZK proofs',
      ],
      [
          ('Z1', 'test_msg_zcash_orchard', 'test_fvk_reference_vectors',
-          'FVK reference vectors', 'FVK output matches known test vectors.', ['FVK export']),
+          'FVK reference vectors',
+          'Verifies Full Viewing Key derivation matches known test vectors from the Zcash spec. '
+          'The FVK allows watch-only wallets to see incoming transactions without spending authority.',
+          ['FVK export']),
          ('Z2', 'test_msg_zcash_orchard', 'test_fvk_field_ranges',
-          'FVK field ranges', 'ak, nk, rivk are within valid Pallas curve ranges.', []),
+          'FVK field ranges',
+          'Verifies ak, nk, and rivk components are within valid Pallas curve ranges. Out-of-range '
+          'values would indicate a derivation bug that could leak private key material.',
+          []),
          ('Z3', 'test_msg_zcash_orchard', 'test_fvk_consistency_across_calls',
-          'FVK deterministic', 'Same account always produces same FVK.', []),
+          'FVK deterministic',
+          'Same account always produces the same FVK. Essential for wallet recovery — a non-deterministic '
+          'FVK would mean watch-only wallets can\'t reliably track funds.',
+          []),
          ('Z4', 'test_msg_zcash_orchard', 'test_fvk_different_accounts',
-          'FVK different accounts', 'Different accounts produce different FVKs.', []),
+          'FVK account isolation',
+          'Different accounts must produce different FVKs. Prevents cross-account privacy leaks — '
+          'if two accounts shared an FVK, anyone with one could see both.',
+          []),
          ('Z5', 'test_msg_zcash_sign_pczt', 'test_single_action_legacy_sighash',
-          'Sign single Orchard action', 'One shielded action, device shows amount + fee.', ['Shielded confirm']),
+          'Sign single Orchard action',
+          'One shielded action confirmed on OLED with amount and fee. The device returns a 64-byte '
+          'RedPallas signature that the host embeds in the PCZT for broadcast.',
+          ['Shielded confirm']),
          ('Z6', 'test_msg_zcash_sign_pczt', 'test_multi_action_legacy_sighash',
-          'Sign multiple actions', 'Multiple Orchard actions in one transaction.', []),
+          'Sign multiple actions',
+          'Multiple Orchard actions (e.g., payment + change) in one transaction. Each action is '
+          'confirmed individually on the OLED.',
+          []),
          ('Z7', 'test_msg_zcash_sign_pczt', 'test_signatures_are_64_bytes',
-          'Signature format', 'Orchard signatures must be exactly 64 bytes (RedPallas).', []),
+          'Signature format validation',
+          'Orchard signatures must be exactly 64 bytes (RedPallas format). Wrong length would indicate '
+          'a serialization bug that would make the transaction invalid on-chain.',
+          []),
          ('Z8', 'test_msg_zcash_sign_pczt', 'test_transparent_shielding_single_input',
-          'Transparent to shielded', 'Transparent BTC-like input shielded into Orchard pool.', ['Hybrid shield']),
+          'Transparent to shielded (hybrid)',
+          'A transparent BTC-like UTXO input is shielded into the Orchard pool. This is the bridge '
+          'from transparent to private — the input is visible but the output is hidden.',
+          ['Hybrid shield']),
          ('Z9', 'test_msg_zcash_sign_pczt', 'test_transparent_shielding_multiple_inputs',
-          'Multi-input shielding', 'Multiple transparent inputs shielded in one tx.', []),
+          'Multi-input shielding',
+          'Multiple transparent inputs consolidated and shielded into Orchard in a single transaction. '
+          'Reduces the transparent footprint to zero.',
+          []),
      ]),
 
     ('D', 'BIP-85 Child Derivation', '7.14.0',
-     'NEW: Derives child BIP-39 mnemonic from master seed via HMAC-SHA512 (BIP-85). Display-only: '
-     'derived words appear on OLED, never transmitted over USB. Seed accessed in CONFIDENTIAL '
-     'buffer, memzero\'d after use.',
+     'NEW: BIP-85 solves a fundamental UX problem in cryptocurrency: users need multiple wallets '
+     '(hot wallet, cold storage, exchange deposits, family members) but managing multiple seed phrases '
+     'is error-prone and insecure. BIP-85 derives child mnemonics deterministically from the master '
+     'seed using HMAC-SHA512. The derived words are displayed ONLY on the OLED — they are never '
+     'transmitted over USB, never stored, and the memory buffer is zeroed after display. This means '
+     'a single KeepKey backup (the master 12/24 words) can regenerate unlimited child wallets, each '
+     'with its own independent seed. The child wallet can be loaded into a software wallet or another '
+     'hardware device without exposing the master seed.',
      [
          'DERIVE: word_count + language + index -> HMAC-SHA512 -> child entropy -> BIP-39 words',
-         'DISPLAY: Words shown on OLED only -> user writes down -> never sent to host',
+         'DISPLAY: Words shown on OLED page by page -> user writes them down -> never sent to host',
+         'SECURITY: Seed accessed in CONFIDENTIAL buffer, memzero\'d immediately after display',
+         'RECOVERY: Master seed backup recovers ALL child wallets at any index',
      ],
      [
          ('D1', 'test_msg_bip85', 'test_bip85_12word_flow',
           'Derive 12-word child',
-          'Derives 128 bits of child entropy -> 12-word BIP-39 mnemonic displayed on OLED.',
+          'Derives 128 bits of child entropy via HMAC-SHA512 and converts to a 12-word BIP-39 '
+          'mnemonic. Words are displayed 6 at a time on the OLED across multiple pages. The user '
+          'presses the button to advance through pages, then the device clears the memory.',
           ['Derivation params', 'Mnemonic on OLED']),
          ('D2', 'test_msg_bip85', 'test_bip85_24word_flow',
-          'Derive 24-word child', '256 bits -> 24 words.', []),
+          'Derive 24-word child',
+          '256 bits of child entropy -> 24-word mnemonic (maximum security). Displayed across 4 '
+          'OLED pages.',
+          []),
          ('D3', 'test_msg_bip85', 'test_bip85_18word_flow',
-          'Derive 18-word child', '192 bits -> 18 words.', []),
+          'Derive 18-word child',
+          '192 bits of child entropy -> 18-word mnemonic.',
+          []),
          ('D4', 'test_msg_bip85', 'test_bip85_different_indices_different_flows',
-          'Different indices', 'Index 0 and index 1 must produce completely different mnemonics.', []),
+          'Different indices produce different seeds',
+          'Index 0 and index 1 must produce completely different child mnemonics. This is how users '
+          'create multiple independent wallets from one master seed.',
+          []),
          ('D5', 'test_msg_bip85', 'test_bip85_deterministic_flow',
-          'Deterministic', 'Same seed + same index always produces same child mnemonic.', []),
+          'Deterministic derivation',
+          'Same master seed + same index must always produce the same child mnemonic. This is what '
+          'makes BIP-85 recoverable — the user only needs their master seed to regenerate any child.',
+          []),
          ('D6', 'test_msg_bip85', 'test_bip85_invalid_word_count',
           'Invalid count rejected', 'Word counts other than 12/18/24 are refused.', []),
      ]),
@@ -948,11 +1091,12 @@ def render(output_path, fw_version, results, screenshot_dir=None):
     active = [(l,t,mf,bg,fl,tests) for l,t,mf,bg,fl,tests in SECTIONS if ver_ge(fw_version, mf)]
     # Separate specs section (no tests) from test sections
     specs = [s for s in active if not s[5]]
-    # Sections with results first, pending sections at bottom.
-    # Within each group: existing chains first (proven), then new features.
-    has_results = [s for s in active if s[5] and any(results.get(t[2]) for t in s[5])]
-    no_results = [s for s in active if s[5] and not any(results.get(t[2]) for t in s[5])]
-    test_sections = has_results + no_results
+    # NEW features first (7.14.0+), then proven legacy chains, then pending
+    new_features = [s for s in active if s[5] and ver_t(s[2]) > (7, 10, 0) and any(results.get(t[2]) for t in s[5])]
+    legacy_passed = [s for s in active if s[5] and ver_t(s[2]) <= (7, 10, 0) and any(results.get(t[2]) for t in s[5])]
+    new_pending = [s for s in active if s[5] and ver_t(s[2]) > (7, 10, 0) and not any(results.get(t[2]) for t in s[5])]
+    legacy_pending = [s for s in active if s[5] and ver_t(s[2]) <= (7, 10, 0) and not any(results.get(t[2]) for t in s[5])]
+    test_sections = new_features + legacy_passed + new_pending + legacy_pending
     total = sum(len(s[5]) for s in test_sections)
     passed = sum(1 for s in test_sections for t in s[5] if results.get(t[2]) == 'pass')
     failed = sum(1 for s in test_sections for t in s[5] if results.get(t[2]) in ('fail','error'))
@@ -967,21 +1111,49 @@ def render(output_path, fw_version, results, screenshot_dir=None):
         pb.text(11, f'Firmware {fw_version}  |  {ts}  |  {failed} FAILED of {total} tests', bold=True, color=RED)
     else:
         pb.text(10, f'Firmware {fw_version}  |  {ts}  |  {total} tests: {passed} passed, {skipped} pending')
+    # Executive summary — what's new in this release
+    if ver_ge(fw_version, '7.14.0'):
+        pb.gap(6)
+        pb.text(12, "What's New in 7.14.0", bold=True)
+        pb.gap(2)
+        for line in _w(
+            'This release adds support for five new blockchain ecosystems and two security features. '
+            'Solana brings Ed25519 signing with full 44-character address display (fixing a prior '
+            '8-character truncation vulnerability). TRON introduces protobuf-based clear-signing with '
+            '13 hardcoded TRC-20 tokens. TON implements v4r2 wallet contracts with SHA-256 cell tree '
+            'verification. Zcash Orchard enables shielded transactions via PCZT streaming with Pallas '
+            'curve signatures. EVM Clear-Signing adds cryptographically verified contract metadata so '
+            'the device can decode and display method names and parameters instead of raw hex. '
+            'BIP-85 derives child mnemonics displayed on OLED only (never transmitted over USB). '
+            'BIP-39 word validation now rejects invalid words immediately during cipher recovery '
+            'instead of silently accepting them.', 100):
+            pb.text(7, line)
+        pb.gap(2)
+        new_count = sum(len(s[5]) for s in new_features)
+        new_pass = sum(1 for s in new_features for t in s[5] if results.get(t[2]) == 'pass')
+        pb.text(8, f'New feature tests: {new_pass}/{new_count} passed', bold=True, color=GREEN if new_pass == new_count else None)
     pb.gap(6)
     pb.text(12, 'Sections', bold=True)
-    _shown_tested = _shown_pending = False
+    _shown_new = _shown_legacy = _shown_pending = False
     for letter, title, mf, _, _, tests in test_sections:
         has_any = any(results.get(t[2]) for t in tests)
         is_new = ver_t(mf) > (7, 10, 0)
-        if has_any and not _shown_tested:
-            _shown_tested = True
+        if is_new and has_any and not _shown_new:
+            pb.text(9, '  --- 7.14.0 New Features ---', bold=True, color=GREEN)
+            _shown_new = True
+        elif not is_new and has_any and not _shown_legacy:
+            pb.text(9, '  --- Proven Chains (regression suite) ---', bold=True)
+            _shown_legacy = True
         elif not has_any and not _shown_pending:
-            pb.text(9, f'  --- Pending (no firmware support yet) ---', bold=True, color=GRAY)
+            pb.text(9, '  --- Pending (firmware feature not available) ---', bold=True, color=GRAY)
             _shown_pending = True
         tag = ' [NEW]' if is_new else ''
         p = sum(1 for t in tests if results.get(t[2]) == 'pass')
+        s_count = sum(1 for t in tests if results.get(t[2]) == 'skip')
         if p == len(tests) and len(tests) > 0:
             pb.text(8, f'  {letter}  {title}{tag} -- {p}/{len(tests)} passed', color=GREEN)
+        elif s_count == len(tests):
+            pb.text(8, f'  {letter}  {title}{tag} -- {s_count} skipped', color=GRAY)
         elif p > 0:
             pb.text(8, f'  {letter}  {title}{tag} -- {p}/{len(tests)} passed')
         else:
