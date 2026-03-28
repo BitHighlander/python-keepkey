@@ -128,7 +128,7 @@ class PDF:
             f.write(b'xref\n')
             f.write(f'0 {len(objs)+1}\n'.encode())
             f.write(b'0000000000 65535 f \n')
-            for o in offs: f.write(f'{o:010d} 00000 g \n'.encode())
+            for o in offs: f.write(f'{o:010d} 00000 n \n'.encode())
             f.write(f'trailer\n<< /Size {len(objs)+1} /Root 1 0 R >>\nstartxref\n{xr}\n%%EOF\n'.encode())
 
 GREEN = (0.13, 0.55, 0.13)
