@@ -633,6 +633,18 @@ SECTIONS = [
           '0x swap ETH to ERC-20', 'DEX aggregator swap via 0x protocol.', []),
          ('E15', 'test_msg_ethereum_cfunc', 'test_sign_execTx',
           'Contract function call', 'Generic contract call signing.', []),
+         ('E16', 'test_msg_ethereum_signtx', 'test_ethereum_contract_data_blocked_without_advanced_mode',
+          'Contract data BLOCKED without AdvancedMode',
+          'Without AdvancedMode policy, arbitrary contract data signing is completely blocked. '
+          'OLED shows "BLOCKED — Blind signing requires AdvancedMode. Enable in device settings." '
+          'This is the default safe behavior — prevents accidental interaction with malicious contracts.',
+          ['BLOCKED warning']),
+         ('E17', 'test_msg_ethereum_signtx', 'test_ethereum_contract_data_allowed_with_advanced_mode',
+          'Contract data ALLOWED with AdvancedMode',
+          'With AdvancedMode enabled, OLED shows "CONFIRM ETHEREUM DATA" with the raw hex bytes '
+          'and byte count. User must explicitly confirm they understand the contract call data. '
+          'This is the power-user path for DeFi protocols.',
+          ['CONFIRM ETHEREUM DATA hex']),
      ]),
 
     ('R', 'Ripple (XRP)', '7.0.0',

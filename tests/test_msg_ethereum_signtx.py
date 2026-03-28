@@ -498,5 +498,59 @@ class TestMsgEthereumSigntx(common.KeepKeyTest):
         )
 
 
+    # ================================================================
+    # AdvancedMode policy tests — blind-sign gate for contract data
+    # ================================================================
+
+    def test_ethereum_contract_data_blocked_without_advanced_mode(self):
+        """Contract data WITHOUT AdvancedMode → "Blocked" on OLED, then Failure.
+        This is the default safe behavior: unknown contract calls cannot be signed
+        unless the user explicitly enables AdvancedMode. Prevents accidental
+        interaction with malicious contracts."""
+        self.requires_fullFeature()
+        self.setup_mnemonic_nopin_nopassphrase()
+        # Ensure AdvancedMode is OFF
+        self.client.apply_policy("AdvancedMode", 0)
+
+        try:
+            self.client.ethereum_sign_tx(
+                n=[0, 0],
+                nonce=0,
+                gas_price=20,
+                gas_limit=20,
+                to=binascii.unhexlify("1d1c328764a41bda0492b66baa30c4a339ff85ef"),
+                value=0,
+                data=b"\xde\xad\xbe\xef" * 4,  # arbitrary contract data
+            )
+            self.fail("Expected CallException for blind-sign without AdvancedMode")
+        except CallException as e:
+            self.assertIn("policy", str(e).lower())
+
+    def test_ethereum_contract_data_allowed_with_advanced_mode(self):
+        """Contract data WITH AdvancedMode → shows raw hex data + "Confirm Ethereum Data".
+        OLED displays the contract call data in hex for the user to verify.
+        This is the power-user path for interacting with DeFi contracts."""
+        self.requires_fullFeature()
+        self.setup_mnemonic_nopin_nopassphrase()
+        # Enable AdvancedMode
+        self.client.apply_policy("AdvancedMode", 1)
+
+        sig_v, sig_r, sig_s = self.client.ethereum_sign_tx(
+            n=[0, 0],
+            nonce=0,
+            gas_price=20,
+            gas_limit=20,
+            to=binascii.unhexlify("1d1c328764a41bda0492b66baa30c4a339ff85ef"),
+            value=0,
+            data=b"\xde\xad\xbe\xef" * 4,
+        )
+        # Should succeed with a valid signature
+        self.assertIn(sig_v, (27, 28))
+        self.assertGreater(len(sig_r), 0)
+
+        # Cleanup
+        self.client.apply_policy("AdvancedMode", 0)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -326,6 +326,41 @@ class TestMsgSolanaSignTx(common.KeepKeyTest):
             address_n=parse_path("m/44'/501'/0'/0'"), raw_tx=raw_tx))
         self.assertEqual(len(resp.signature), 64)
 
+    # ================================================================
+    # Blind-sign policy tests — AdvancedMode gate
+    # ================================================================
+
+    def test_solana_blind_sign_rejected_without_advanced_mode(self):
+        """Unknown instruction WITHOUT AdvancedMode → Failure.
+        Default safe behavior: unknown programs cannot be signed."""
+        self.requires_fullFeature()
+        self.requires_message("SolanaSignTx")
+        self.setup_mnemonic_allallall()
+        self.client.apply_policy('AdvancedMode', False)
+        from_pubkey = self._get_from_pubkey()
+        unknown_program = b'\xEE' * 32
+        instr_data = b'\x01\x02\x03\x04'
+        raw_tx = self._build_tx(from_pubkey, [], unknown_program, instr_data)
+        with pytest.raises(CallException) as exc:
+            self.client.call(messages.SolanaSignTx(
+                address_n=parse_path("m/44'/501'/0'/0'"), raw_tx=raw_tx))
+        self.assertIn("AdvancedMode", str(exc.value))
+
+    def test_solana_blind_sign_allowed_with_advanced_mode(self):
+        """Unknown instruction WITH AdvancedMode → "Blind Sign" warning, user confirms."""
+        self.requires_fullFeature()
+        self.requires_message("SolanaSignTx")
+        self.setup_mnemonic_allallall()
+        self.client.apply_policy('AdvancedMode', True)
+        from_pubkey = self._get_from_pubkey()
+        unknown_program = b'\xEE' * 32
+        instr_data = b'\x01\x02\x03\x04'
+        raw_tx = self._build_tx(from_pubkey, [], unknown_program, instr_data)
+        resp = self.client.call(messages.SolanaSignTx(
+            address_n=parse_path("m/44'/501'/0'/0'"), raw_tx=raw_tx))
+        self.assertEqual(len(resp.signature), 64)
+        self.client.apply_policy('AdvancedMode', False)
+
 
 if __name__ == '__main__':
     unittest.main()
