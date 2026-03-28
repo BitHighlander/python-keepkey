@@ -228,12 +228,17 @@ def _pick_best_frame(test_dir, btn_files):
             pass
         return candidate
     elif len(btn_files) == 2:
-        # Likely just setUp frames (wipe + load). Return None.
+        # 2 frames: first is setUp wipe, second may be real content.
+        # Check if the second frame is different from a blank/setUp screen.
+        candidate = os.path.join(test_dir, btn_files[1])
+        if not _is_setup_frame(candidate):
+            return candidate
         return None
     else:
-        # Single frame — almost always setUp noise (wipe confirm from setUp).
-        # Real test screenshots come in pairs or more (confirm + action).
-        # A single frame means the test used call_raw() with no callback screenshots.
+        # Single frame — check if it has real content (e.g. manual _capture_oled call)
+        candidate = os.path.join(test_dir, btn_files[0])
+        if not _is_setup_frame(candidate):
+            return candidate
         return None
 
 def detect_fw():
@@ -823,6 +828,8 @@ SECTIONS = [
           'Different account indices', 'Verifies different accounts produce different addresses.', []),
          ('S3', 'test_msg_solana_getaddress', 'test_solana_deterministic',
           'Deterministic derivation', 'Same path always produces same address.', []),
+         ('S3b', 'test_msg_solana_getaddress', 'test_solana_show_address',
+          'Show Solana address on OLED', 'Address displayed with QR code for visual verification against host.', ['Solana QR + address']),
          ('S4', 'test_msg_solana_signtx', 'test_solana_sign_system_transfer',
           'Sign SOL transfer', 'System::Transfer with full address + amount display.', ['SOL amount + address']),
          ('S5', 'test_msg_solana_signtx', 'test_solana_sign_message',
@@ -849,6 +856,8 @@ SECTIONS = [
           'Different accounts', 'Different indices produce different addresses.', []),
          ('T3', 'test_msg_tron_getaddress', 'test_tron_deterministic',
           'Deterministic derivation', 'Same path always produces same address.', []),
+         ('T3b', 'test_msg_tron_getaddress', 'test_tron_show_address',
+          'Show TRON address on OLED', 'Address displayed with QR code for visual verification.', ['TRON QR + address']),
          ('T4', 'test_msg_tron_signtx', 'test_tron_sign_transfer_structured',
           'Sign TRX transfer', 'Structured clear-sign with full address display.', ['TRX send']),
          ('T5', 'test_msg_tron_signtx', 'test_tron_sign_transfer_legacy_raw_data',
@@ -872,11 +881,13 @@ SECTIONS = [
           'Derive TON address', 'Full 48-character base64url address.', ['Full 48-char address']),
          ('N2', 'test_msg_ton_getaddress', 'test_ton_different_accounts',
           'Different accounts', 'Different indices produce different addresses.', []),
+         ('N2b', 'test_msg_ton_getaddress', 'test_ton_show_address',
+          'Show TON address on OLED', 'Address displayed with QR code for visual verification.', ['TON QR + address']),
          ('N3', 'test_msg_ton_getaddress', 'test_ton_address_format',
           'Address format validation', 'Bounceable/non-bounceable format check.', []),
          ('N4', 'test_msg_ton_signtx', 'test_ton_sign_structured',
           'Sign TON clear-sign', 'Hash verification passes, shows "TON Transfer" with details.', ['TON Transfer']),
-         ('N5', 'test_msg_ton_signtx', 'test_ton_sign_with_comment',
+         ('N5', 'test_msg_ton_signtx', 'test_ton_sign_with_memo',
           'Sign TON with memo', 'Comment displayed before signing.', ['Memo display']),
          ('N6', 'test_msg_ton_signtx', 'test_ton_sign_legacy_raw_tx',
           'Sign TON blind', 'Raw tx without structured fields triggers blind sign.', ['Blind warning']),
@@ -1002,10 +1013,15 @@ def render(output_path, fw_version, results, screenshot_dir=None):
         pb.gap(3)
         p = sum(1 for t in tests if results.get(t[2]) == 'pass')
         f_count = sum(1 for t in tests if results.get(t[2]) in ('fail','error'))
+        s_count = sum(1 for t in tests if results.get(t[2]) == 'skip')
         if p == len(tests):
             pb.text(9, f'Tests: {p}/{len(tests)} -- ALL PASSED', bold=True, color=GREEN)
         elif f_count > 0:
             pb.text(9, f'Tests: {p}/{len(tests)} passed, {f_count} FAILED', bold=True, color=RED)
+        elif s_count > 0 and p > 0:
+            pb.text(9, f'Tests: {p}/{len(tests)} passed, {s_count} skipped', bold=True)
+        elif s_count == len(tests):
+            pb.text(9, f'Tests: 0/{len(tests)} -- {s_count} skipped (firmware feature not available)', bold=True, color=GRAY)
         else:
             pb.text(9, f'Tests: {len(tests)}', bold=True)
         pb.gap(2)
