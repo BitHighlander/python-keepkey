@@ -104,7 +104,12 @@ class PDF:
             nxt += 1
 
         pids = []
-        for stream, w, h, img_refs in self.pages:
+        total_pages = len(self.pages)
+        for page_num, (stream, w, h, img_refs) in enumerate(self.pages, 1):
+            # Add page footer: firmware version + page number
+            footer_left = getattr(self, 'footer_text', 'KeepKey Firmware Test Report')
+            footer = f'0.5 0.5 0.5 rg BT /F1 7 Tf 40 20 Td ({footer_left}) Tj ET BT /F1 7 Tf {w-100} 20 Td (Page {page_num} of {total_pages}) Tj ET 0 0 0 rg'
+            stream = stream + '\n' + footer
             c = zlib.compress(stream.encode('latin-1', 'replace'))
             objs.append(f'{nxt} 0 obj\n<< /Length {len(c)} /Filter /FlateDecode >>\nstream\n'.encode() + c + b'\nendstream\nendobj\n')
             stream_id = nxt; nxt += 1
@@ -463,10 +468,14 @@ SECTIONS = [
      ]),
 
     ('B', 'Bitcoin', '7.0.0',
-     'Bitcoin is the primary chain and most extensively tested. Covers legacy P2PKH, P2SH-wrapped '
-     'SegWit, native SegWit (bech32), and Taproot (P2TR). Transaction signing validates that the '
-     'device correctly displays every output address and amount, calculates fees, detects change '
-     'outputs, and resists output substitution attacks. Also covers UTXO forks sharing BTC signing code.',
+     'Bitcoin ($1.8T market cap) is the primary chain and most extensively tested — 28 tests covering '
+     'every address type and signing scenario. The KeepKey supports legacy P2PKH (1...), P2SH-wrapped '
+     'SegWit (3...), native SegWit bech32 (bc1q...), and Taproot P2TR (bc1p...). Transaction signing '
+     'is the most security-critical operation: the device must correctly display every output address '
+     'and amount, calculate fees (inputs - outputs), detect change outputs (same xpub), and resist '
+     'output substitution attacks where a compromised host swaps the recipient between signing passes. '
+     'The OLED shows "TRANSACTION — Do you want to send X BTC from your wallet? This includes a '
+     'transaction fee of Y BTC." Also covers UTXO forks (LTC, Dash, BTG, GRS) sharing BTC signing code.',
      [
          'ADDRESS: Derive key from BIP-32 path -> display on OLED with QR code -> user verifies against host',
          'SIGN TX: Device shows each output (full address + amount) -> shows fee -> user confirms -> signs',
@@ -1088,6 +1097,7 @@ SECTIONS = [
 def render(output_path, fw_version, results, screenshot_dir=None):
     pdf = PDF(); pb = PB(pdf)
     ts = datetime.now().strftime('%Y-%m-%d %H:%M')
+    pdf.footer_text = f'KeepKey Firmware {fw_version} Test Report  |  {ts}'
     active = [(l,t,mf,bg,fl,tests) for l,t,mf,bg,fl,tests in SECTIONS if ver_ge(fw_version, mf)]
     # Separate specs section (no tests) from test sections
     specs = [s for s in active if not s[5]]
