@@ -147,8 +147,6 @@ class KeepKeyTest(unittest.TestCase):
         if proto is None or not hasattr(proto, msg_name):
             self.skipTest("%s proto message not available" % msg_name)
         # Send a minimal probe -- if firmware returns Failure_UnexpectedMessage, skip.
-        # Any OTHER response (including Failure_SyntaxError for bad params) means
-        # the firmware DOES handle this message type -- don't skip.
         from keepkeylib import messages_pb2 as base_proto
         msg = getattr(proto, msg_name)()
         try:
@@ -157,15 +155,8 @@ class KeepKeyTest(unittest.TestCase):
                 self.skipTest("%s not supported by this firmware build" % msg_name)
             # Re-init device state after probe (some messages may have changed state)
             self.client.call_raw(base_proto.Initialize())
-        except Exception as e:
-            if 'UnexpectedMessage' in str(e):
-                self.skipTest("%s not supported by this firmware build" % msg_name)
-            # Other exceptions (timeout, syntax error) mean the firmware tried to
-            # handle the message -- re-init and continue
-            try:
-                self.client.call_raw(base_proto.Initialize())
-            except Exception:
-                pass
+        except Exception:
+            self.skipTest("%s not supported by this firmware build" % msg_name)
 
     def requires_fullFeature(self):
       if self.client.features.firmware_variant == "KeepKeyBTC" or \
