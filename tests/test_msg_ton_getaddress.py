@@ -42,6 +42,18 @@ class TestMsgTonGetAddress(common.KeepKeyTest):
 
         self.assertTrue(len(address) > 0, "TON address must be non-empty")
 
+    def test_ton_show_address(self):
+        """Display TON address on OLED with QR code (show_display=True)."""
+        self.requires_firmware("7.14.0")
+        self.requires_message("TonGetAddress")
+        self.setup_mnemonic_allallall()
+
+        resp = self.client.ton_get_address(
+            parse_path(TON_DEFAULT_PATH),
+            show_display=True
+        )
+        self.assertTrue(len(resp.address) > 0)
+
     def test_ton_different_accounts(self):
         """Different derivation paths must produce different addresses."""
         self.requires_firmware("7.14.0")
