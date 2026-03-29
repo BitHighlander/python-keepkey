@@ -19,7 +19,7 @@ def _read_png_pixels(path):
     """Read a 256x64 grayscale PNG and return raw pixel bytes (256*64 bytes, 0 or 255)."""
     with open(path, 'rb') as f:
         data = f.read()
-    # Minimal PNG parser -- skip signature, find IDAT, decompress
+    # Minimal PNG parser — skip signature, find IDAT, decompress
     assert data[:8] == b'\x89PNG\r\n\x1a\n'
     pos = 8
     idat_chunks = []
@@ -191,14 +191,14 @@ def _is_setup_frame(path):
     """Check if a screenshot is a setUp noise frame (IMPORT RECOVERY, WIPE, or blank/logo)."""
     try:
         pixels, w, h = _read_png_pixels(path)
-        # Count non-zero pixels -- blank/logo frames have very few or very specific patterns
+        # Count non-zero pixels — blank/logo frames have very few or very specific patterns
         lit = sum(1 for b in pixels if b > 128)
         total = w * h
         # Very blank (< 5% lit) = idle/logo screen
         if lit < total * 0.05:
             return True
         # Check for "IMPORT RECOVERY" text by looking at pixel density in top-left region
-        # setUp always shows this screen -- it's ~20% lit with specific pattern
+        # setUp always shows this screen — it's ~20% lit with specific pattern
         # Real test screens vary widely, so we check the raw bytes for known patterns
         # Simple heuristic: if first 2 btn frames match, skip them (setUp wipe + load)
         return False
@@ -212,7 +212,7 @@ def _pick_best_frame(test_dir, btn_files):
     if not btn_files:
         return None
     # 3+ frames: [0]=setUp wipe, [1]=setUp load or instruction detail, [-1]=final confirm
-    # Prefer second-to-last frame -- it's the instruction-specific content
+    # Prefer second-to-last frame — it's the instruction-specific content
     # (amounts, addresses, parameters). The last frame is usually a generic
     # "Sign this transaction?" confirmation that's the same for every tx.
     if len(btn_files) > 2:
@@ -221,10 +221,10 @@ def _pick_best_frame(test_dir, btn_files):
         return os.path.join(test_dir, btn_files[idx])
     elif len(btn_files) == 2:
         # 2 frames: btn00000 is always setUp (wipe confirm), btn00001 is the test.
-        # Always show btn00001 -- it's the only real test frame.
+        # Always show btn00001 — it's the only real test frame.
         return os.path.join(test_dir, btn_files[1])
     else:
-        # Single frame -- almost always setUp noise (wipe confirm from setUp).
+        # Single frame — almost always setUp noise (wipe confirm from setUp).
         return None
 
 def detect_fw():
@@ -263,7 +263,7 @@ def parse_junit(path):
         # Key by module::method (disambiguates collisions like test_sign_btc_eth_swap)
         if mod:
             results[f'{mod}::{name}'] = status
-        # Bare method fallback -- only set if no collision
+        # Bare method fallback — only set if no collision
         if name not in results or status == 'pass':
             results[name] = status
     return results
@@ -649,13 +649,13 @@ SECTIONS = [
          ('E16', 'test_msg_ethereum_signtx', 'test_ethereum_blind_sign_blocked',
           'Blind sign BLOCKED (AdvancedMode OFF)',
           'Contract data with AdvancedMode disabled. Device shows BLOCKED screen and refuses to sign. '
-          'This is the default behavior -- blind signing must be explicitly enabled.',
-          ['BLOCKED screen']),
+          'This is the default behavior — blind signing must be explicitly enabled.',
+          []),  # screenshots added when AdvancedMode policy lands (7-prep)
          ('E17', 'test_msg_ethereum_signtx', 'test_ethereum_blind_sign_allowed',
           'Blind sign ALLOWED (AdvancedMode ON)',
           'Contract data with AdvancedMode enabled. Device shows BLIND SIGNATURE warning '
           'before proceeding. User sees raw data and must explicitly confirm.',
-          ['BLIND SIGNATURE warning'])
+          []),  # screenshots added when AdvancedMode policy lands (7-prep)
      ]),
 
     ('R', 'Ripple (XRP)', '7.0.0',
@@ -835,7 +835,10 @@ SECTIONS = [
          ('S3', 'test_msg_solana_getaddress', 'test_solana_deterministic',
           'Deterministic derivation', 'Same path always produces same address.', []),
          ('S3b', 'test_msg_solana_getaddress', 'test_solana_show_address',
-          'Show address on OLED', 'Full 44-char base58 address with QR code on OLED display.', ['Solana QR + 44-char address']),
+          'Show Solana address on OLED',
+          'Full 44-character base58 address with QR code and derivation path displayed on OLED. '
+          'User compares against wallet app — primary defense against address substitution.',
+          ['Solana QR + address']),
          ('S4', 'test_msg_solana_signtx', 'test_solana_sign_system_transfer',
           'Sign SOL transfer', 'System::Transfer with full address + amount display.', ['SOL amount + address']),
          ('S5', 'test_msg_solana_signtx', 'test_solana_sign_message',
@@ -879,13 +882,20 @@ SECTIONS = [
          ('T3', 'test_msg_tron_getaddress', 'test_tron_deterministic',
           'Deterministic derivation', 'Same path always produces same address.', []),
          ('T3b', 'test_msg_tron_getaddress', 'test_tron_show_address',
-          'Show address on OLED', 'Full 34-char Base58Check TRON address with QR code.', ['TRON QR + 34-char address']),
+          'Show TRON address on OLED',
+          'Full 34-character base58 address with QR code and derivation path m/44\'/195\'/0\'/0/0 '
+          'displayed on OLED. User compares against wallet app to detect address substitution.',
+          ['TRON QR + address']),
          ('T4', 'test_msg_tron_signtx', 'test_tron_sign_transfer_structured',
           'Sign TRX transfer', 'Structured clear-sign with full address display.', ['TRX send']),
          ('T5', 'test_msg_tron_signtx', 'test_tron_sign_transfer_legacy_raw_data',
           'Sign TRX legacy raw', 'Raw protobuf data triggers blind sign path.', ['Blind sign']),
          ('T6', 'test_msg_tron_signtx', 'test_tron_sign_trc20_transfer',
-          'Sign TRC-20 USDT transfer', 'Known TRC-20 token decoded from ABI data. Shows "Send 1.00 USDT to [address]".', ['Token + amount']),
+          'Sign TRC-20 USDT transfer',
+          'Device decodes the ABI transfer(address,uint256) call, matches the contract address '
+          '(TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t) against its hardcoded USDT entry, and shows '
+          '"Send 1.00 USDT to [address]" with the decoded token name and amount.',
+          ['Token name + amount']),
          ('T7', 'test_msg_tron_signtx', 'test_tron_sign_missing_fields_rejected',
           'Missing fields rejected', 'Incomplete transaction data is refused.', []),
      ]),
@@ -904,7 +914,10 @@ SECTIONS = [
          ('N2', 'test_msg_ton_getaddress', 'test_ton_different_accounts',
           'Different accounts', 'Different indices produce different addresses.', []),
          ('N2b', 'test_msg_ton_getaddress', 'test_ton_show_address',
-          'Show address on OLED', 'Full 48-char base64url TON address with QR code.', ['TON QR + 48-char address']),
+          'Show TON address on OLED',
+          'Full 48-character base64url address with QR code and derivation path displayed on OLED. '
+          'User verifies against wallet app.',
+          ['TON QR + address']),
          ('N3', 'test_msg_ton_getaddress', 'test_ton_address_format',
           'Address format validation', 'Bounceable/non-bounceable format check.', []),
          ('N4', 'test_msg_ton_signtx', 'test_ton_sign_structured',
@@ -1048,7 +1061,7 @@ def render(output_path, fw_version, results, screenshot_dir=None):
             pb.check(9, f'{tid} {meth}', r)
             pb.text(7, f'{title}  ({mod}.py)')
             for cline in _w(ctx, 95): pb.text(7, cline)
-            # Embed OLED screenshots -- use _pick_best_frame for the primary image,
+            # Embed OLED screenshots — use _pick_best_frame for the primary image,
             # then show up to 2 more frames for multi-screen flows (signing, swaps)
             if screenshot_dir:
                 test_dir = os.path.join(screenshot_dir, mod.replace('test_',''), meth)

@@ -146,7 +146,7 @@ class KeepKeyTest(unittest.TestCase):
                     continue
         if proto is None or not hasattr(proto, msg_name):
             self.skipTest("%s proto message not available" % msg_name)
-        # Send a minimal probe -- if firmware returns Failure_UnexpectedMessage, skip.
+        # Send a minimal probe — if firmware returns Failure_UnexpectedMessage, skip
         from keepkeylib import messages_pb2 as base_proto
         msg = getattr(proto, msg_name)()
         try:

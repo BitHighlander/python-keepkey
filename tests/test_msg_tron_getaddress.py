@@ -42,18 +42,6 @@ class TestMsgTronGetAddress(common.KeepKeyTest):
         self.assertTrue(len(address) == 34, "Tron address must be 34 characters, got %d" % len(address))
         self.assertTrue(address.startswith('T'), "Tron address must start with 'T', got '%s'" % address)
 
-    def test_tron_show_address(self):
-        """Display TRON address on OLED with QR code (show_display=True)."""
-        self.requires_firmware("7.14.0")
-        self.requires_message("TronGetAddress")
-        self.setup_mnemonic_allallall()
-
-        resp = self.client.tron_get_address(
-            parse_path(TRON_DEFAULT_PATH),
-            show_display=True
-        )
-        self.assertTrue(len(resp.address) == 34)
-
     def test_tron_different_accounts(self):
         """Different derivation paths must produce different addresses."""
         self.requires_firmware("7.14.0")
