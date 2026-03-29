@@ -650,12 +650,12 @@ SECTIONS = [
           'Blind sign BLOCKED (AdvancedMode OFF)',
           'Contract data with AdvancedMode disabled. Device shows BLOCKED screen and refuses to sign. '
           'This is the default behavior -- blind signing must be explicitly enabled.',
-          []),  # screenshots added when AdvancedMode policy lands (7-prep)
+          ['BLOCKED screen']),
          ('E17', 'test_msg_ethereum_signtx', 'test_ethereum_blind_sign_allowed',
           'Blind sign ALLOWED (AdvancedMode ON)',
           'Contract data with AdvancedMode enabled. Device shows BLIND SIGNATURE warning '
           'before proceeding. User sees raw data and must explicitly confirm.',
-          []),  # screenshots added when AdvancedMode policy lands (7-prep)
+          ['BLIND SIGNATURE warning'])
      ]),
 
     ('R', 'Ripple (XRP)', '7.0.0',
