@@ -460,7 +460,7 @@ SECTIONS = [
           'BIP-39 invalid word rejected during cipher recovery',
           'Enter a non-BIP-39 word ("zz") during cipher recovery with enforce_wordlist=True. '
           'Firmware must reject immediately with Failure instead of silently accepting.',
-          []),  # screenshots added when BIP-39 validation lands (PR #3)
+          ['Wordlist rejection warning']),
      ]),
 
     ('B', 'Bitcoin', '7.0.0',
