@@ -83,9 +83,11 @@ class TestMsgEthereumSigntx(common.KeepKeyTest):
     def test_ethereum_blind_sign_blocked(self):
         """AdvancedMode OFF + contract data = device refuses to sign.
 
-        OLED shows 'BLOCKED — Blind signing is disabled' before returning Failure.
-        This is the default behavior — users must explicitly enable AdvancedMode.
+        OLED shows 'BLOCKED — Blind signing requires AdvancedMode' then Failure.
+        Feature-gated: requires EthereumTxMetadata (AdvancedMode policy).
         """
+        self.requires_firmware("7.14.0")
+        self.requires_message("EthereumTxMetadata")
         self.requires_fullFeature()
         self.setup_mnemonic_nopin_nopassphrase()
         self.client.apply_policy("AdvancedMode", 0)
@@ -109,7 +111,10 @@ class TestMsgEthereumSigntx(common.KeepKeyTest):
 
         OLED shows 'BLIND SIGNATURE — You are signing raw contract data'
         before showing the data and allowing signing.
+        Feature-gated: requires EthereumTxMetadata (AdvancedMode policy).
         """
+        self.requires_firmware("7.14.0")
+        self.requires_message("EthereumTxMetadata")
         self.requires_fullFeature()
         self.setup_mnemonic_nopin_nopassphrase()
         self.client.apply_policy("AdvancedMode", 1)
