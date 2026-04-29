@@ -1646,6 +1646,25 @@ class ProtocolMixin(object):
             tron_proto.TronSignTx(address_n=address_n, raw_tx=raw_tx)
         )
 
+    @expect(tron_proto.TronMessageSignature)
+    def tron_sign_message(self, address_n, message, show_display=False):
+        return self.call(
+            tron_proto.TronSignMessage(
+                address_n=address_n,
+                message=message,
+                show_display=show_display,
+            )
+        )
+
+    def tron_verify_message(self, address, signature, message):
+        return self.call(
+            tron_proto.TronVerifyMessage(
+                address=address,
+                signature=signature,
+                message=message,
+            )
+        )
+
     # ── TON ────────────────────────────────────────────────────
     @expect(ton_proto.TonAddress)
     def ton_get_address(self, address_n, show_display=False):
