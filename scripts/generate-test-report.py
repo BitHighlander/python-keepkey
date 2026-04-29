@@ -813,13 +813,15 @@ SECTIONS = [
      ]),
 
     ('S', 'Solana', '7.14.0',
-     'NEW: Full Solana with Ed25519 (SLIP-10), base58 addresses, 37 instruction types across 7 '
+     'Full Solana with Ed25519 (SLIP-10), base58 addresses, 37 instruction types across 7 '
      'programs. Key security fix: full 44-character address display replaces old 8-char truncation '
-     'that was a spoofing vector.',
+     'that was a spoofing vector. Off-chain message signing (domain-separated envelope) added '
+     'in 7.14.x — the proper fix for the SignMessage AdvancedMode band-aid.',
      [
          'ADDRESS: m/44\'/501\'/0\' Ed25519 -> full 44-char base58 on OLED',
          'SIGN TX: Parse instructions -> per-instruction confirmation -> Ed25519 sign',
-         'SIGN MESSAGE: Arbitrary bytes -> hex display -> Ed25519 sign',
+         'SIGN MESSAGE: Arbitrary bytes -> hex display -> Ed25519 sign (AdvancedMode-gated)',
+         'SIGN OFFCHAIN: "\\xff" || "solana offchain" || ver || fmt || len || msg -> Ed25519 sign',
      ],
      [
          ('S1', 'test_msg_solana_getaddress', 'test_solana_get_address',
@@ -858,14 +860,41 @@ SECTIONS = [
           'SPL Token with metadata',
           'Token transfer with SolanaTokenInfo (mint, symbol, decimals). OLED shows human-readable token name.',
           ['Token name + amount']),
+         ('S13', 'test_msg_solana_signoffchainmessage', 'test_sign_ascii_message',
+          'Off-chain ASCII (fmt 0)',
+          'Domain-separated envelope; format 0 (printable ASCII) renders + signs.',
+          ['Off-chain message confirm']),
+         ('S14', 'test_msg_solana_signoffchainmessage', 'test_sign_at_size_ceiling',
+          'Off-chain at 1212-byte ceiling',
+          'Spec ceiling for formats 0/1; firmware accepts at the limit.', []),
+         ('S15', 'test_msg_solana_signoffchainmessage', 'test_format_2_rejected',
+          'Reject format 2',
+          'Extended UTF-8 (Ledger-only blind sign) explicitly rejected on this device.', []),
+         ('S16', 'test_msg_solana_signoffchainmessage', 'test_invalid_version_rejected',
+          'Reject non-zero version',
+          'Spec defines only version 0; firmware rejects others.', []),
+         ('S17', 'test_msg_solana_signoffchainmessage', 'test_empty_message_rejected',
+          'Reject empty message',
+          'Zero-length payload rejected with SyntaxError.', []),
+         ('S18', 'test_msg_solana_signoffchainmessage', 'test_pubkey_matches_get_address',
+          'Pubkey binding',
+          'Returned public_key Base58 == solana_get_address() at same path.', []),
+         ('S19', 'test_msg_solana_signoffchainmessage', 'test_envelope_signature_verifies_offdevice',
+          'Envelope (not raw msg) is signed',
+          'Off-device Ed25519 verify against the envelope succeeds; against the bare message fails. Catches firmware regressions that drop the envelope.',
+          []),
      ]),
 
     ('T', 'TRON', '7.14.0',
-     'NEW: TRON with secp256k1 signing, base58 addresses. Blind-sign via raw_data. '
-     'Structured reconstruct-then-sign and TRC-20 clear-signing deferred to 7.15+.',
+     'TRON with secp256k1 signing, base58 addresses. Blind-sign via raw_data. '
+     'TIP-191 personal_sign + VerifyMessage and TIP-712 typed-data hash mode '
+     'added in 7.14.x. Structured reconstruct-then-sign and TRC-20 clear-signing '
+     'deferred to 7.15+.',
      [
          'ADDRESS: m/44\'/195\'/0\'/0/0 -> full 34-char base58 TRON address',
          'BLIND-SIGN: Raw protobuf data -> hash + sign',
+         'TIP-191: keccak256("\\x19TRON Signed Message:\\n" + len + msg) -> secp256k1',
+         'TIP-712: keccak256("\\x19\\x01" + domainHash + msgHash) -> secp256k1',
      ],
      [
          ('T1', 'test_msg_tron_getaddress', 'test_tron_get_address',
@@ -880,16 +909,45 @@ SECTIONS = [
           'Sign TRX blind (raw_data)', 'Raw protobuf data triggers blind sign path. Shows amount + address if provided.', ['TRON blind sign']),
          ('T5', 'test_msg_tron_signtx', 'test_tron_sign_missing_fields_rejected',
           'Missing fields rejected', 'Incomplete transaction data is refused.', []),
+         ('T6', 'test_msg_tron_signmessage', 'test_sign_text_roundtrip',
+          'TIP-191 sign + verify text', 'Sign printable ASCII message; verify the returned signature with the same client.', ['TRON message confirm']),
+         ('T7', 'test_msg_tron_signmessage', 'test_sign_bytes_roundtrip',
+          'TIP-191 sign + verify bytes', 'Non-printable byte payload renders as hex preview, round-trips through verify.', ['TRON bytes confirm']),
+         ('T8', 'test_msg_tron_signmessage', 'test_sign_empty_message',
+          'TIP-191 empty message', 'Zero-length message is valid per TIP-191 (ASCII "0" length encoding).', []),
+         ('T9', 'test_msg_tron_signmessage', 'test_sign_address_matches_get_address',
+          'Address binding', 'Signature response address equals tron_get_address() at the same path.', []),
+         ('T10', 'test_msg_tron_signmessage', 'test_verify_rejects_corrupted_signature',
+          'Reject corrupted signature', 'Flipping a byte in r/s causes verify to recover a different pubkey -> Failure.', []),
+         ('T11', 'test_msg_tron_signmessage', 'test_verify_rejects_wrong_message',
+          'Reject wrong message', 'Valid signature against a different message -> Failure.', []),
+         ('T12', 'test_msg_tron_signmessage', 'test_invalid_path_rejected',
+          'Reject non-TRON path', 'm/44\'/60\'/... rejected by firmware path guard before signing.', []),
+         ('T13', 'test_msg_tron_signtypedhash', 'test_sign_typed_hash_with_message',
+          'TIP-712 sign hash + message', 'Domain + message hash mode; 65-byte recoverable secp256k1 sig.', ['TIP-712 confirm dialogs']),
+         ('T14', 'test_msg_tron_signtypedhash', 'test_sign_typed_hash_domain_only',
+          'TIP-712 domain-only', 'primaryType=EIP712Domain case: no message hash, domain digest only.', []),
+         ('T15', 'test_msg_tron_signtypedhash', 'test_sign_typed_hash_address_matches_get_address',
+          'Address binding', 'Sig response address matches tron_get_address() at same path.', []),
+         ('T16', 'test_msg_tron_signtypedhash', 'test_invalid_domain_hash_length_rejected',
+          'Reject bad domain hash', '31-byte domain_separator_hash rejected; must be exactly 32 bytes.', []),
+         ('T17', 'test_msg_tron_signtypedhash', 'test_invalid_message_hash_length_rejected',
+          'Reject bad message hash', '33-byte message_hash rejected; must be exactly 32 bytes.', []),
+         ('T18', 'test_msg_tron_signtypedhash', 'test_invalid_path_rejected',
+          'Reject non-TRON path', 'm/44\'/60\'/... rejected by path guard before TIP-712 signing.', []),
      ]),
 
     ('N', 'TON', '7.14.0',
-     'NEW: TON v4r2 wallet contracts. Ed25519 signing with structured field display. '
-     'Blind-sign for raw transactions. Memo/comment support. '
-     'Full clear-sign with cell tree reconstruction deferred to 7.15+.',
+     'TON v4r2 wallet contracts. Ed25519 signing with structured field display. '
+     'Blind-sign for raw transactions. Memo/comment support. Bare Ed25519 SignMessage '
+     'added in 7.14.x with AdvancedMode policy gate (no domain separation; TON Connect '
+     'ton_proof envelope deferred to a follow-up). Full clear-sign with cell tree '
+     'reconstruction deferred to 7.15+.',
      [
          'ADDRESS: m/44\'/607\'/0\' -> full 48-char base64url TON address',
          'STRUCTURED: Amount + address + memo shown as display context -> sign',
          'BLIND-SIGN: Raw tx without structured fields -> "BLIND SIGNATURE" warning',
+         'SIGN-MESSAGE: Raw Ed25519 over message bytes; gated by AdvancedMode policy',
      ],
      [
          ('N1', 'test_msg_ton_getaddress', 'test_ton_get_address',
@@ -908,6 +966,18 @@ SECTIONS = [
           'Sign TON blind', 'Raw tx without structured fields triggers blind sign.', ['Blind warning']),
          ('N7', 'test_msg_ton_signtx', 'test_ton_sign_missing_fields_rejected',
           'Missing fields rejected', 'Incomplete data refused.', []),
+         ('N8', 'test_msg_ton_signmessage', 'test_blocked_when_advanced_mode_disabled',
+          'AdvancedMode gate blocks default', 'Without AdvancedMode policy, request fails with ActionCancelled.', []),
+         ('N9', 'test_msg_ton_signmessage', 'test_sign_text_advanced_mode',
+          'Sign text (AdvancedMode)', '64-byte Ed25519 sig + 32-byte pubkey returned for printable text.', ['TON message confirm']),
+         ('N10', 'test_msg_ton_signmessage', 'test_sign_bytes_advanced_mode',
+          'Sign bytes (AdvancedMode)', 'Non-printable bytes render as hex preview before signing.', ['TON bytes confirm']),
+         ('N11', 'test_msg_ton_signmessage', 'test_empty_message_rejected',
+          'Reject empty message', 'Zero-length message rejected with SyntaxError.', []),
+         ('N12', 'test_msg_ton_signmessage', 'test_invalid_path_rejected',
+          'Reject non-TON path', 'Solana / non-TON BIP-44 path rejected by guard.', []),
+         ('N13', 'test_msg_ton_signmessage', 'test_pubkey_consistency',
+          'Pubkey stable, sig varies', 'Same path returns same Ed25519 pubkey across signs; different msgs -> different sigs.', []),
      ]),
 
     ('Z', 'Zcash Orchard', '7.14.0',
@@ -972,6 +1042,10 @@ SECTIONS = [
 def render(output_path, fw_version, results, screenshot_dir=None):
     pdf = PDF(); pb = PB(pdf)
     ts = datetime.now().strftime('%Y-%m-%d %H:%M')
+    # Optional build label (branch + commit) for per-PR differentiation.
+    # CI sets KK_BUILD_LABEL from "${head_ref}@${sha:0:8}" so identical
+    # SECTIONS + same firmware version still produce distinct PDFs.
+    build_label = os.environ.get('KK_BUILD_LABEL', '').strip()
     active = [(l,t,mf,bg,fl,tests) for l,t,mf,bg,fl,tests in SECTIONS if ver_ge(fw_version, mf)]
     # Separate specs section (no tests) from test sections
     specs = [s for s in active if not s[5]]
@@ -994,6 +1068,8 @@ def render(output_path, fw_version, results, screenshot_dir=None):
         pb.text(11, f'Firmware {fw_version}  |  {ts}  |  {failed} FAILED of {total} tests', bold=True, color=RED)
     else:
         pb.text(10, f'Firmware {fw_version}  |  {ts}  |  {total} tests: {passed} passed, {skipped} pending')
+    if build_label:
+        pb.text(9, f'Build: {build_label}')
     pb.gap(6)
     pb.text(12, 'Sections', bold=True)
     _shown_tested = _shown_pending = False

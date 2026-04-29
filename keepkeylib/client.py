@@ -1633,6 +1633,20 @@ class ProtocolMixin(object):
             solana_proto.SolanaSignMessage(address_n=address_n, message=message)
         )
 
+    @expect(solana_proto.SolanaOffchainMessageSignature)
+    def solana_sign_offchain_message(
+        self, address_n, message, version=0, message_format=0, show_display=False
+    ):
+        return self.call(
+            solana_proto.SolanaSignOffchainMessage(
+                address_n=address_n,
+                version=version,
+                message_format=message_format,
+                message=message,
+                show_display=show_display,
+            )
+        )
+
     # ── Tron ───────────────────────────────────────────────────
     @expect(tron_proto.TronAddress)
     def tron_get_address(self, address_n, show_display=False):
@@ -1665,6 +1679,16 @@ class ProtocolMixin(object):
             )
         )
 
+    @expect(tron_proto.TronTypedDataSignature)
+    def tron_sign_typed_hash(self, address_n, domain_separator_hash, message_hash=None):
+        msg = tron_proto.TronSignTypedHash(
+            address_n=address_n,
+            domain_separator_hash=domain_separator_hash,
+        )
+        if message_hash is not None:
+            msg.message_hash = message_hash
+        return self.call(msg)
+
     # ── TON ────────────────────────────────────────────────────
     @expect(ton_proto.TonAddress)
     def ton_get_address(self, address_n, show_display=False):
@@ -1676,6 +1700,16 @@ class ProtocolMixin(object):
     def ton_sign_tx(self, address_n, raw_tx):
         return self.call(
             ton_proto.TonSignTx(address_n=address_n, raw_tx=raw_tx)
+        )
+
+    @expect(ton_proto.TonMessageSignature)
+    def ton_sign_message(self, address_n, message, show_display=False):
+        return self.call(
+            ton_proto.TonSignMessage(
+                address_n=address_n,
+                message=message,
+                show_display=show_display,
+            )
         )
 
     # ── Zcash Address Display ─────────────────────────────────
