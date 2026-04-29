@@ -1,14 +1,7 @@
-# Zcash seed_fingerprint binding tests (ZIP-32 §6.1).
+# Device-backed tests for ZIP-32 §6.1 seed_fingerprint binding.
 #
-# Covers:
-#   - calculate_seed_fingerprint() matches the Keystone3 reference vector
-#     (cross-checked against keystone3-firmware
-#     rust/keystore/src/algorithms/zcash/mod.rs::test_keystore_derive_zcash_ufvk).
-#   - ZcashGetOrchardFVK returns the seed_fingerprint.
-#   - The fingerprint is consistent across messages on the same device/seed
-#     (FVK response, ZcashAddress response).
-#   - expected_seed_fingerprint passes when matching, fails when wrong.
-#   - Backward compat: omitting expected_seed_fingerprint still works.
+# Pure-Python helper tests live in test_zcash_seed_fingerprint_helper.py
+# (no common.KeepKeyTest dependency — runs offline).
 
 import unittest
 import pytest
@@ -24,40 +17,12 @@ H = 0x80000000
 
 
 class TestMsgZcashSeedFingerprint(common.KeepKeyTest):
+    """Binding behavior on a real device. Wipes/initializes the device."""
 
     def setUp(self):
         super().setUp()
         self.requires_firmware("7.15.0")
         self.requires_message("ZcashGetOrchardFVK")
-
-    # ── Pure helper: no device ────────────────────────────────────────
-
-    def test_helper_reference_vector(self):
-        """calculate_seed_fingerprint matches the keystone3-firmware vector.
-
-        seed = 000102...1f, fingerprint =
-        deff604c246710f7176dead02aa746f2fd8d5389f7072556dcb555fdbe5e3ae3
-        """
-        seed = bytes(range(32))
-        fp = calculate_seed_fingerprint(seed)
-        self.assertEqual(
-            fp.hex(),
-            "deff604c246710f7176dead02aa746f2fd8d5389f7072556dcb555fdbe5e3ae3",
-        )
-
-    def test_helper_rejects_trivial_seeds(self):
-        with pytest.raises(ValueError):
-            calculate_seed_fingerprint(b"\x00" * 32)
-        with pytest.raises(ValueError):
-            calculate_seed_fingerprint(b"\xff" * 32)
-
-    def test_helper_rejects_out_of_range(self):
-        with pytest.raises(ValueError):
-            calculate_seed_fingerprint(b"\x01" * 31)  # too short
-        with pytest.raises(ValueError):
-            calculate_seed_fingerprint(b"\x01" * 253)  # too long
-
-    # ── Device-backed tests ───────────────────────────────────────────
 
     def test_get_orchard_fvk_returns_seed_fingerprint(self):
         """ZcashGetOrchardFVK response now includes a 32-byte seed_fingerprint."""
@@ -69,7 +34,7 @@ class TestMsgZcashSeedFingerprint(common.KeepKeyTest):
         )
         self.assertTrue(fvk.HasField("seed_fingerprint"))
         self.assertEqual(len(fvk.seed_fingerprint), 32)
-        # Not all zero (defensive: would mean BLAKE2b returned junk)
+        # Defensive: BLAKE2b should never produce all-zero output for a real seed
         self.assertNotEqual(fvk.seed_fingerprint, b"\x00" * 32)
 
     def test_fingerprint_stable_across_accounts(self):
@@ -82,99 +47,104 @@ class TestMsgZcashSeedFingerprint(common.KeepKeyTest):
             address_n=[H + 32, H + 133, H + 1], account=1)
         self.assertEqual(fvk0.seed_fingerprint, fvk1.seed_fingerprint)
 
-    # ── ZcashDisplayAddress: expected_seed_fingerprint binding ────────
+    # ── ZcashDisplayAddress: through client.zcash_display_address(...) ──
+    # These tests exercise the new expected_seed_fingerprint kwarg on the
+    # public client helper, not just raw protobuf.
 
-    def test_display_address_accepts_matching_fingerprint(self):
-        """DisplayAddress with the device's own fingerprint succeeds."""
+    def test_display_address_helper_accepts_matching_fingerprint(self):
+        """Helper passes expected_seed_fingerprint through; matching fp succeeds."""
         self.setup_mnemonic_allallall()
 
         fvk = self.client.zcash_get_orchard_fvk(
             address_n=[H + 32, H + 133, H + 0], account=0)
 
-        resp = self.client.call(
-            zcash_proto.ZcashDisplayAddress(
-                address_n=[H + 32, H + 133, H + 0],
-                account=0,
-                address="u1placeholder",
-                ak=fvk.ak,
-                nk=fvk.nk,
-                rivk=fvk.rivk,
-                expected_seed_fingerprint=fvk.seed_fingerprint,
-            )
+        resp = self.client.zcash_display_address(
+            address_n=[H + 32, H + 133, H + 0],
+            address="u1placeholder",
+            ak=fvk.ak,
+            nk=fvk.nk,
+            rivk=fvk.rivk,
+            account=0,
+            expected_seed_fingerprint=fvk.seed_fingerprint,
         )
         self.assertIsInstance(resp, zcash_proto.ZcashAddress)
-        # Response also returns the device's seed_fingerprint
         self.assertTrue(resp.HasField("seed_fingerprint"))
         self.assertEqual(resp.seed_fingerprint, fvk.seed_fingerprint)
 
-    def test_display_address_rejects_wrong_fingerprint(self):
-        """DisplayAddress with a wrong fingerprint is rejected before display."""
+    def test_display_address_helper_rejects_wrong_fingerprint(self):
+        """Helper passes expected_seed_fingerprint through; wrong fp rejected."""
         self.setup_mnemonic_allallall()
 
         fvk = self.client.zcash_get_orchard_fvk(
             address_n=[H + 32, H + 133, H + 0], account=0)
 
-        # Flip one byte to fabricate a non-matching fingerprint
         bad = bytearray(fvk.seed_fingerprint)
         bad[0] ^= 0xFF
 
         with pytest.raises(CallException):
-            self.client.call(
-                zcash_proto.ZcashDisplayAddress(
-                    address_n=[H + 32, H + 133, H + 0],
-                    account=0,
-                    address="u1placeholder",
-                    ak=fvk.ak,
-                    nk=fvk.nk,
-                    rivk=fvk.rivk,
-                    expected_seed_fingerprint=bytes(bad),
-                )
+            self.client.zcash_display_address(
+                address_n=[H + 32, H + 133, H + 0],
+                address="u1placeholder",
+                ak=fvk.ak,
+                nk=fvk.nk,
+                rivk=fvk.rivk,
+                account=0,
+                expected_seed_fingerprint=bytes(bad),
             )
 
-    def test_display_address_backward_compat_no_fingerprint(self):
-        """Omitting expected_seed_fingerprint still works (existing flow)."""
+    def test_display_address_helper_backward_compat(self):
+        """Helper without expected_seed_fingerprint still works (existing flow)."""
         self.setup_mnemonic_allallall()
 
         fvk = self.client.zcash_get_orchard_fvk(
             address_n=[H + 32, H + 133, H + 0], account=0)
 
-        resp = self.client.call(
-            zcash_proto.ZcashDisplayAddress(
-                address_n=[H + 32, H + 133, H + 0],
-                account=0,
-                address="u1placeholder",
-                ak=fvk.ak,
-                nk=fvk.nk,
-                rivk=fvk.rivk,
-            )
+        resp = self.client.zcash_display_address(
+            address_n=[H + 32, H + 133, H + 0],
+            address="u1placeholder",
+            ak=fvk.ak,
+            nk=fvk.nk,
+            rivk=fvk.rivk,
+            account=0,
         )
         self.assertIsInstance(resp, zcash_proto.ZcashAddress)
-        # Device still populates seed_fingerprint on responses regardless
+        # Device populates seed_fingerprint on responses regardless of request
         self.assertTrue(resp.HasField("seed_fingerprint"))
         self.assertEqual(resp.seed_fingerprint, fvk.seed_fingerprint)
 
-    # ── ZcashSignPCZT: expected_seed_fingerprint binding ──────────────
-
-    def test_sign_pczt_rejects_wrong_fingerprint(self):
-        """SignPCZT with wrong fingerprint is rejected before any signing."""
+    def test_device_fingerprint_matches_python_helper(self):
+        """Cross-check: device-derived fingerprint == calculate_seed_fingerprint(seed)
+        for the all-allallall mnemonic seed. Ties firmware C and python-keepkey
+        helper to the same byte-for-byte output."""
         self.setup_mnemonic_allallall()
 
-        # Fabricate a fingerprint that's clearly not this seed's.
+        fvk = self.client.zcash_get_orchard_fvk(
+            address_n=[H + 32, H + 133, H + 0], account=0)
+
+        # all-all-all mnemonic, empty passphrase, BIP-39 seed
+        from mnemonic import Mnemonic
+        seed = Mnemonic.to_seed("all all all all all all all all all all all all", "")
+        expected_fp = calculate_seed_fingerprint(seed)
+        self.assertEqual(fvk.seed_fingerprint, expected_fp)
+
+    # ── ZcashSignPCZT: through client.zcash_sign_pczt(...) ──────────────
+
+    def test_sign_pczt_helper_rejects_wrong_fingerprint(self):
+        """Helper passes expected_seed_fingerprint through; wrong fp rejected
+        before any signing crypto runs."""
+        self.setup_mnemonic_allallall()
+
         wrong_fp = b"\x01" * 32
 
-        # Minimal action — won't actually sign because we expect rejection
-        # at the seed-fingerprint check before any key derivation.
         with pytest.raises(CallException):
-            self.client.call(
-                zcash_proto.ZcashSignPCZT(
-                    address_n=[H + 32, H + 133, H + 0],
-                    account=0,
-                    n_actions=1,
-                    total_amount=100000,
-                    fee=10000,
-                    branch_id=0x37519621,
-                    expected_seed_fingerprint=wrong_fp,
-                )
+            self.client.zcash_sign_pczt(
+                address_n=[H + 32, H + 133, H + 0],
+                actions=[{}],  # placeholder — won't be reached past the fp check
+                account=0,
+                total_amount=100000,
+                fee=10000,
+                branch_id=0x37519621,
+                expected_seed_fingerprint=wrong_fp,
             )
 
 
