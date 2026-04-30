@@ -1661,24 +1661,26 @@ class ProtocolMixin(object):
 
     # ── Zcash Address Display ─────────────────────────────────
     @expect(zcash_proto.ZcashAddress)
-    def zcash_display_address(self, address_n, address, ak, nk, rivk,
-                              account=None, expected_seed_fingerprint=None):
-        """Display a Zcash unified address on the device for user confirmation.
+    def zcash_display_address(self, address_n, account=None,
+                              expected_seed_fingerprint=None,
+                              address=None, ak=None, nk=None, rivk=None):
+        """Display the device-derived Orchard unified address on screen.
 
         Args:
             address_n: ZIP-32 derivation path [32', 133', account']
-            address: unified address string ("u1...")
-            ak, nk, rivk: 32-byte FVK components for verification
             account: account index (alternative to full path)
             expected_seed_fingerprint: optional 32-byte ZIP-32 §6.1 seed
                 fingerprint. If provided, device verifies the match before
-                displaying and rejects with Failure on mismatch.
+                deriving and rejects with Failure on mismatch.
+            address, ak, nk, rivk: deprecated, accepted and silently dropped
+                for callers built against the pre-derive flow. The device
+                derives the UA itself; host-supplied values are ignored.
 
         Returns:
-            ZcashAddress with .address and .seed_fingerprint of the
-            attesting device.
+            ZcashAddress with .address (device-derived) and .seed_fingerprint.
         """
-        kwargs = dict(address_n=address_n, address=address, ak=ak, nk=nk, rivk=rivk)
+        del address, ak, nk, rivk  # field 3-6 were dropped from the proto
+        kwargs = dict(address_n=address_n)
         if account is not None:
             kwargs['account'] = account
         if expected_seed_fingerprint is not None:

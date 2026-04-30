@@ -60,10 +60,6 @@ class TestMsgZcashSeedFingerprint(common.KeepKeyTest):
 
         resp = self.client.zcash_display_address(
             address_n=[H + 32, H + 133, H + 0],
-            address="u1placeholder",
-            ak=fvk.ak,
-            nk=fvk.nk,
-            rivk=fvk.rivk,
             account=0,
             expected_seed_fingerprint=fvk.seed_fingerprint,
         )
@@ -84,16 +80,12 @@ class TestMsgZcashSeedFingerprint(common.KeepKeyTest):
         with pytest.raises(CallException):
             self.client.zcash_display_address(
                 address_n=[H + 32, H + 133, H + 0],
-                address="u1placeholder",
-                ak=fvk.ak,
-                nk=fvk.nk,
-                rivk=fvk.rivk,
                 account=0,
                 expected_seed_fingerprint=bytes(bad),
             )
 
-    def test_display_address_helper_backward_compat(self):
-        """Helper without expected_seed_fingerprint still works (existing flow)."""
+    def test_display_address_helper_no_fingerprint(self):
+        """Helper without expected_seed_fingerprint succeeds; response carries fp."""
         self.setup_mnemonic_allallall()
 
         fvk = self.client.zcash_get_orchard_fvk(
@@ -101,10 +93,6 @@ class TestMsgZcashSeedFingerprint(common.KeepKeyTest):
 
         resp = self.client.zcash_display_address(
             address_n=[H + 32, H + 133, H + 0],
-            address="u1placeholder",
-            ak=fvk.ak,
-            nk=fvk.nk,
-            rivk=fvk.rivk,
             account=0,
         )
         self.assertIsInstance(resp, zcash_proto.ZcashAddress)
