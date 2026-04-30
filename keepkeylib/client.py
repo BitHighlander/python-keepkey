@@ -1661,14 +1661,18 @@ class ProtocolMixin(object):
 
     # ── Zcash Address Display ─────────────────────────────────
     @expect(zcash_proto.ZcashAddress)
-    def zcash_display_address(self, address_n, address, ak, nk, rivk,
-                              account=None, expected_seed_fingerprint=None):
+    def zcash_display_address(self, address_n, address=None, ak=None, nk=None,
+                              rivk=None, account=None,
+                              expected_seed_fingerprint=None):
         """Display a Zcash unified address on the device for user confirmation.
 
         Args:
             address_n: ZIP-32 derivation path [32', 133', account']
-            address: unified address string ("u1...")
-            ak, nk, rivk: 32-byte FVK components for verification
+            address: optional unified address string ("u1..."). If omitted,
+                the device derives the default Orchard-only UA from seed/account.
+            ak, nk, rivk: optional 32-byte FVK components for host-supplied
+                address verification. Required by firmware when address is
+                provided.
             account: account index (alternative to full path)
             expected_seed_fingerprint: optional 32-byte ZIP-32 §6.1 seed
                 fingerprint. If provided, device verifies the match before
@@ -1678,7 +1682,15 @@ class ProtocolMixin(object):
             ZcashAddress with .address and .seed_fingerprint of the
             attesting device.
         """
-        kwargs = dict(address_n=address_n, address=address, ak=ak, nk=nk, rivk=rivk)
+        kwargs = dict(address_n=address_n)
+        if address is not None:
+            kwargs['address'] = address
+        if ak is not None:
+            kwargs['ak'] = ak
+        if nk is not None:
+            kwargs['nk'] = nk
+        if rivk is not None:
+            kwargs['rivk'] = rivk
         if account is not None:
             kwargs['account'] = account
         if expected_seed_fingerprint is not None:
