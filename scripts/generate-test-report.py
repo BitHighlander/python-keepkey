@@ -775,15 +775,15 @@ SECTIONS = [
        'cause fund loss or invalid transactions on the block-lattice.',
        [])]),
 
-    # ===== 7.14 NEW FEATURES =====
-    ('V', 'EVM Clear-Signing', '7.14.0',
+    # ===== 7.15.1 NEW FEATURES =====
+    ('V', 'EVM Clear-Signing', '7.15.1',
      'NEW: Verified transaction metadata for EVM contracts. Host sends a signed blob with contract '
      'name, function, and decoded parameters. Device verifies blob signature against trusted key, '
-     'then shows human-readable details with VERIFIED icon. Blind-sign policy gating is deferred '
-     'to firmware 7.15+.',
+     'then shows human-readable details with VERIFIED icon. Blind-sign policy gating ships with '
+     'firmware 7.15.1+.',
      [
          'CLEAR-SIGN: Signed metadata -> verify signature -> VERIFIED icon + method + decoded args',
-         'BLIND SIGN: No metadata + AdvancedMode on -> contract data signed (no gate until 7.15+)',
+         'BLIND SIGN: No metadata + AdvancedMode on -> contract data signed after policy gate',
      ],
      [
          ('V1', 'test_msg_ethereum_clear_signing', 'test_valid_metadata_returns_verified',
@@ -808,7 +808,7 @@ SECTIONS = [
          ('V8', 'test_msg_ethereum_signtx', 'test_ethereum_blind_sign_allowed',
           'Blind sign permitted (AdvancedMode ON)',
           'Contract data with AdvancedMode enabled. Device allows signing. '
-          'Blind-sign blocking deferred to 7.15+.',
+          'Blind-sign policy gating covered in 7.15.1+.',
           []),
      ]),
 
