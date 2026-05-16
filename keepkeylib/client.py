@@ -49,6 +49,7 @@ from . import messages_solana_pb2 as solana_proto
 from . import messages_tron_pb2 as tron_proto
 from . import messages_ton_pb2 as ton_proto
 from . import messages_zcash_pb2 as zcash_proto
+from . import messages_hive_pb2 as hive_proto
 from . import types_pb2 as types
 from . import eos
 from . import nano
@@ -1851,6 +1852,30 @@ class ProtocolMixin(object):
             raise Exception("Unexpected response type: %s" % type(resp))
 
         return resp
+
+    # ── Hive ────────────────────────────────────────────────────
+    @expect(hive_proto.HivePublicKey)
+    def hive_get_public_key(self, address_n, show_display=False):
+        return self.call(
+            hive_proto.HiveGetPublicKey(address_n=address_n, show_display=show_display)
+        )
+
+    @expect(hive_proto.HiveSignedTx)
+    def hive_sign_tx(self, address_n, chain_id, ref_block_num, ref_block_prefix,
+                     expiration, sender, recipient, amount, decimals, asset_symbol, memo=''):
+        return self.call(hive_proto.HiveSignTx(**{
+            'address_n': address_n,
+            'chain_id': chain_id,
+            'ref_block_num': ref_block_num,
+            'ref_block_prefix': ref_block_prefix,
+            'expiration': expiration,
+            'from': sender,
+            'to': recipient,
+            'amount': amount,
+            'decimals': decimals,
+            'asset_symbol': asset_symbol,
+            'memo': memo,
+        }))
 
 class KeepKeyClient(ProtocolMixin, TextUIMixin, BaseClient):
     pass
