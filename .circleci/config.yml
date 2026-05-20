@@ -11,7 +11,8 @@ jobs:
       - run:
           name: Clone python-keepkey (current branch)
           command: |
-            git clone --depth 1 -b "$CIRCLE_BRANCH" https://github.com/keepkey/python-keepkey.git .pykk
+            PYKK_REPO="https://github.com/${CIRCLE_PROJECT_USERNAME:-BitHighlander}/${CIRCLE_PROJECT_REPONAME:-python-keepkey}.git"
+            git clone --depth 1 -b "$CIRCLE_BRANCH" "$PYKK_REPO" .pykk
             cd .pykk && git submodule update --init --recursive
 
       # ────────────────────────────────────────────────────────────────
@@ -27,8 +28,11 @@ jobs:
             # Move python-keepkey out of the way
             mv .pykk ../
 
-            # Clone firmware repository (expects $FIRMWARE_REPO env var)
-            git clone --depth 1 -b master "$FIRMWARE_REPO" .
+            # Clone firmware repository. The Zcash clear-signing test branch
+            # needs the matching firmware branch unless CI overrides it.
+            FIRMWARE_REPO="${FIRMWARE_REPO:-https://github.com/BitHighlander/keepkey-firmware.git}"
+            FIRMWARE_BRANCH="${FIRMWARE_BRANCH:-feature/clearsign-txs}"
+            git clone --depth 1 -b "$FIRMWARE_BRANCH" "$FIRMWARE_REPO" .
 
             # Initialise firmware submodules
             git submodule update --init --recursive
@@ -57,10 +61,19 @@ jobs:
             docker cp "$(docker-compose ps -q python-keepkey)":/kkemu/test-reports/. ../../test-reports/
             popd
 
+            # Build the combined PDF from JUnit + captured OLED frames.
+            FW_VERSION="${FW_VERSION:-7.15.0}" python3 scripts/generate-test-report.py || true
+
             # Fail job if either container reported non-zero status
             [ "$(cat test-reports/python-keepkey/status)$(cat test-reports/firmware-unit/status)" = "00" ] || exit 1
 
       - store_test_results:
+          path: test-reports
+
+      - store_artifacts:
+          path: test-report.pdf
+
+      - store_artifacts:
           path: test-reports
 
 # ──────────────────────────────────────────────────────────────────────
