@@ -87,9 +87,11 @@ _zcash_wire_ids = {
     1304: ('ZcashGetOrchardFVK', zcash_proto),
     1305: ('ZcashOrchardFVK', zcash_proto),
     1306: ('ZcashTransparentInput', zcash_proto),
-    1307: ('ZcashTransparentSig', zcash_proto),
+    1307: ('ZcashTransparentSigned', zcash_proto),
     1308: ('ZcashDisplayAddress', zcash_proto),
     1309: ('ZcashAddress', zcash_proto),
+    1310: ('ZcashTransparentOutput', zcash_proto),
+    1311: ('ZcashTransparentAck', zcash_proto),
 }
 for wire_id, (msg_name, mod) in _zcash_wire_ids.items():
     msg_class = getattr(mod, msg_name, None)

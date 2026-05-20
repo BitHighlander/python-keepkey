@@ -1698,17 +1698,22 @@ class ProtocolMixin(object):
     @session
     def zcash_sign_pczt(self, address_n, actions, account=None,
                         total_amount=0, fee=0, branch_id=0x37519621,
+                        tx_version=5, version_group_id=0x26a7270a,
+                        lock_time=0, expiry_height=0,
                         header_digest=None, transparent_digest=None,
                         sapling_digest=None, orchard_digest=None,
                         orchard_flags=None, orchard_value_balance=None,
                         orchard_anchor=None, transparent_inputs=None,
+                        transparent_outputs=None,
                         expected_seed_fingerprint=None):
         """Sign a Zcash Orchard shielded transaction via PCZT protocol.
 
         Phase 2: Sends ZcashSignPCZT, then loops on ZcashPCZTActionAck
         feeding Orchard actions one at a time.
-        Phase 3: If transparent_inputs provided, handles ZcashTransparentSig
-        loop for transparent-to-shielded (shielding) transactions.
+        Phase 3: If transparent inputs/outputs are provided, streams all
+        transparent outputs first and all inputs second. Firmware verifies the
+        transparent digest and returns transparent signatures before Orchard
+        action streaming begins.
 
         Args:
             address_n: ZIP-32 derivation path [32', 133', account']
@@ -1717,13 +1722,19 @@ class ProtocolMixin(object):
             total_amount: total ZEC in zatoshis (for display)
             fee: fee in zatoshis (for display)
             branch_id: consensus branch ID (default NU5)
-            header_digest: 32-byte header digest (enables on-device sighash)
+            tx_version: transaction version without overwinter bit
+            version_group_id: ZIP-244 transaction version group ID
+            lock_time: transaction lock time
+            expiry_height: transaction expiry height
+            header_digest: 32-byte header digest verified from header fields
             transparent_digest: 32-byte transparent digest
-            sapling_digest: 32-byte sapling digest
+            sapling_digest: unsupported; firmware rejects this when provided
             orchard_digest: 32-byte orchard digest
             orchard_flags: bundle flags byte (enables digest verification)
             orchard_value_balance: signed i64 value balance
             orchard_anchor: 32-byte anchor
+            transparent_inputs: plaintext transparent input dicts
+            transparent_outputs: plaintext transparent output dicts
 
         Returns:
             ZcashSignedPCZT with .signatures list and optional .txid
@@ -1736,6 +1747,7 @@ class ProtocolMixin(object):
         # let firmware derive account from the path. Only set account
         # explicitly if the caller passed it.
         n_transparent_inputs = len(transparent_inputs) if transparent_inputs else 0
+        n_transparent_outputs = len(transparent_outputs) if transparent_outputs else 0
 
         kwargs = dict(
             address_n=address_n,
@@ -1743,6 +1755,10 @@ class ProtocolMixin(object):
             total_amount=total_amount,
             fee=fee,
             branch_id=branch_id,
+            tx_version=tx_version,
+            version_group_id=version_group_id,
+            lock_time=lock_time,
+            expiry_height=expiry_height,
         )
         if account is not None:
             kwargs['account'] = account
@@ -1766,42 +1782,65 @@ class ProtocolMixin(object):
             # Tell the device this is a hybrid shielding tx so it gates
             # Orchard actions until all transparent inputs are signed.
             kwargs['n_transparent_inputs'] = n_transparent_inputs
+        if n_transparent_outputs > 0:
+            kwargs['n_transparent_outputs'] = n_transparent_outputs
 
         resp = self.call(zcash_proto.ZcashSignPCZT(**kwargs))
 
-        # Phase 3 first: transparent input signing for hybrid shielding tx.
-        # Firmware sends ZcashPCZTActionAck(next_index=0) after ZcashSignPCZT
-        # as a generic "session ready" signal regardless of n_transparent_inputs.
-        # When transparent_inputs are present the host drives that phase first;
-        # the device rejects ZcashPCZTAction with "Transparent inputs not yet
-        # complete" until every TransparentInput has been signed.
-        transparent_sigs = []
-        if n_transparent_inputs > 0:
-            if not isinstance(resp, zcash_proto.ZcashPCZTActionAck):
+        # Phase 3 first: transparent plaintext streaming for hybrid txs.
+        if n_transparent_outputs > 0 or n_transparent_inputs > 0:
+            if not isinstance(resp, zcash_proto.ZcashTransparentAck):
                 raise Exception(
-                    "Expected ZcashPCZTActionAck after ZcashSignPCZT, got %s"
+                    "Expected ZcashTransparentAck after ZcashSignPCZT, got %s"
                     % type(resp).__name__)
+
+            for i in range(n_transparent_outputs):
+                if not resp.HasField('next_output_index') or resp.next_output_index != i:
+                    raise Exception(
+                        "Device requested transparent output %s but host expected %d"
+                        % (getattr(resp, 'next_output_index', None), i))
+                out = dict(transparent_outputs[i])
+                out['index'] = i
+                resp = self.call(zcash_proto.ZcashTransparentOutput(**out))
+                if isinstance(resp, proto.Failure):
+                    raise Exception(
+                        "Zcash transparent output failed at index %d: %s"
+                        % (i, resp.message))
+
             for i in range(n_transparent_inputs):
+                if not isinstance(resp, zcash_proto.ZcashTransparentAck):
+                    raise Exception(
+                        "Expected ZcashTransparentAck before transparent input %d, got %s"
+                        % (i, type(resp).__name__))
+                if not resp.HasField('next_input_index') or resp.next_input_index != i:
+                    raise Exception(
+                        "Device requested transparent input %s but host expected %d"
+                        % (getattr(resp, 'next_input_index', None), i))
                 inp = dict(transparent_inputs[i])
                 inp['index'] = i
-                sig = self.call(zcash_proto.ZcashTransparentInput(**inp))
-                if isinstance(sig, proto.Failure):
+                resp = self.call(zcash_proto.ZcashTransparentInput(**inp))
+                if isinstance(resp, proto.Failure):
                     raise Exception(
                         "Zcash transparent signing failed at input %d: %s"
-                        % (i, sig.message))
-                if not isinstance(sig, zcash_proto.ZcashTransparentSig):
+                        % (i, resp.message))
+
+            if n_transparent_inputs > 0:
+                if not isinstance(resp, zcash_proto.ZcashTransparentSigned):
                     raise Exception(
-                        "Expected ZcashTransparentSig at transparent index %d, got %s"
-                        % (i, type(sig).__name__))
-                transparent_sigs.append(sig)
-            # Last sig must carry the 0xFF completion sentinel.
-            if transparent_sigs[-1].next_index != 0xFF:
-                raise Exception(
-                    "Transparent phase did not complete (last next_index=%d, "
-                    "expected 0xFF)" % transparent_sigs[-1].next_index)
-            # Send the first Orchard action; firmware returns ActionAck or SignedPCZT.
-            resp = self.call(zcash_proto.ZcashPCZTAction(index=0, **actions[0]))
-            next_orchard = 1
+                        "Expected ZcashTransparentSigned after transparent inputs, got %s"
+                        % type(resp).__name__)
+                if len(resp.signatures) != n_transparent_inputs:
+                    raise Exception(
+                        "Device returned %d transparent signatures, expected %d"
+                        % (len(resp.signatures), n_transparent_inputs))
+                resp = self.call(zcash_proto.ZcashPCZTAction(index=0, **actions[0]))
+                next_orchard = 1
+            else:
+                if not isinstance(resp, zcash_proto.ZcashPCZTActionAck):
+                    raise Exception(
+                        "Expected ZcashPCZTActionAck after transparent outputs, got %s"
+                        % type(resp).__name__)
+                next_orchard = 0
         else:
             next_orchard = 0
 
