@@ -53,5 +53,55 @@ class TestMsgEthereumSignTypedDataHash(common.KeepKeyTest):
             self.assertEqual(retval.address, test['result']['address'])
             self.assertEqual(binascii.hexlify(retval.signature), test['result']['sig'][2:])
 
+class TestEIP712Security(common.KeepKeyTest):
+    """Regression tests for fix/eip712-security.
+
+    The firmware previously accepted negative values for uint256 fields in
+    EIP-712 typed data (sign_typed_data_hash path), which could allow a
+    crafted message to produce a misleading or exploitable signature.
+    """
+
+    def test_eip712_normal_hash_signing_still_works(self):
+        """Normal EIP-712 domain + message hash signing must still succeed after the security fix."""
+        self.requires_fullFeature()
+        self.requires_firmware("7.4.0")
+        self.setup_mnemonic_allallall()
+
+        # Values taken from EIP-712 test suite — simple transfer permit domain
+        domain_separator_hash = binascii.unhexlify(
+            "f2cee375fa42b42143804025fc449deafd50cc031ca257e0b194a650a912090f"
+        )
+        message_hash = binascii.unhexlify(
+            "2d7a851c2b6942cbca9ca80b9b4e7ac6e00d0f17b3e8e3d0b2faa5a15f17de6"
+        )
+
+        retval = self.client.ethereum_sign_typed_data_hash(
+            n=tools.parse_path("m/44'/60'/0'/0/0"),
+            ds_hash=domain_separator_hash,
+            m_hash=message_hash,
+        )
+
+        self.assertIsNotNone(retval.signature)
+        self.assertEqual(len(retval.signature), 65)
+
+    def test_eip712_hash_signing_no_message_hash(self):
+        """EIP-712 domain-only (no message hash) signing must still succeed."""
+        self.requires_fullFeature()
+        self.requires_firmware("7.4.0")
+        self.setup_mnemonic_allallall()
+
+        domain_separator_hash = binascii.unhexlify(
+            "f2cee375fa42b42143804025fc449deafd50cc031ca257e0b194a650a912090f"
+        )
+
+        retval = self.client.ethereum_sign_typed_data_hash(
+            n=tools.parse_path("m/44'/60'/0'/0/0"),
+            ds_hash=domain_separator_hash,
+        )
+
+        self.assertIsNotNone(retval.signature)
+        self.assertEqual(len(retval.signature), 65)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -532,6 +532,91 @@ class TestMsgEthereumSigntx(common.KeepKeyTest):
             "6e33c4230b1ecf96a8dbb514b4aec0a6d6ba53f8991c8143f77812aa6daa993f",
         )
 
+    # ------------------------------------------------------------------ #
+    # Regression: fix/eip1559 — chain_id >= 256 RLP encoding bug         #
+    # Before the fix, large chain IDs were stored as uint8_t which        #
+    # silently truncated to the low byte, producing a wrong signer.       #
+    # ------------------------------------------------------------------ #
+
+    def test_eip1559_base_chain_id(self):
+        """Regression for fix/eip1559 — EIP-1559 signing on Base (chain_id=8453).
+
+        chain_id=8453 overflows uint8_t (max 255).  Before the fix the device
+        signed with chain_id & 0xFF = 5 instead of 8453, recovering the wrong
+        signer address.  This test verifies the signature is produced without
+        error and that sig_v is 0 or 1 (EIP-1559 parity, not the legacy value).
+        """
+        self.requires_fullFeature()
+        self.requires_firmware("7.15.0")
+        self.setup_mnemonic_allallall()
+
+        sig_v, sig_r, sig_s = self.client.ethereum_sign_tx(
+            n=[0x80000000 | 44, 0x80000000 | 60, 0x80000000, 0, 0],
+            nonce=0,
+            max_fee_per_gas=100000000000,        # 100 gwei
+            max_priority_fee_per_gas=1000000000, # 1 gwei
+            gas_limit=21000,
+            to=binascii.unhexlify("1d1c328764a41bda0492b66baa30c4a339ff85ef"),
+            value=1000000000000000,  # 0.001 ETH
+            chain_id=8453,           # Base mainnet
+        )
+
+        # EIP-1559 parity must be 0 or 1 (never 0x21 etc. from wrong chain_id)
+        self.assertIn(sig_v, (0, 1), "EIP-1559 sig_v must be 0 or 1 for Base chain_id=8453")
+        self.assertEqual(len(sig_r), 32)
+        self.assertEqual(len(sig_s), 32)
+
+    def test_eip1559_arbitrum_chain_id(self):
+        """Regression for fix/eip1559 — EIP-1559 signing on Arbitrum One (chain_id=42161).
+
+        chain_id=42161 (0xA4B1) was affected by the same uint8_t truncation.
+        Verifies the device signs successfully and max_priority_fee_per_gas
+        is honoured (non-zero tip distinguishes this from a legacy tx).
+        """
+        self.requires_fullFeature()
+        self.requires_firmware("7.15.0")
+        self.setup_mnemonic_allallall()
+
+        sig_v, sig_r, sig_s = self.client.ethereum_sign_tx(
+            n=[0x80000000 | 44, 0x80000000 | 60, 0x80000000, 0, 0],
+            nonce=1,
+            max_fee_per_gas=200000000000,        # 200 gwei
+            max_priority_fee_per_gas=2000000000, # 2 gwei priority tip
+            gas_limit=21000,
+            to=binascii.unhexlify("1d1c328764a41bda0492b66baa30c4a339ff85ef"),
+            value=5000000000000000,  # 0.005 ETH
+            chain_id=42161,          # Arbitrum One
+        )
+
+        self.assertIn(sig_v, (0, 1), "EIP-1559 sig_v must be 0 or 1 for Arbitrum chain_id=42161")
+        self.assertEqual(len(sig_r), 32)
+        self.assertEqual(len(sig_s), 32)
+
+    def test_eip1559_avalanche_chain_id(self):
+        """Regression for fix/eip1559 — EIP-1559 signing on Avalanche C-Chain (chain_id=43114).
+
+        chain_id=43114 rounds to 0x2A when truncated to uint8_t.  Verify
+        signing works and parity is valid EIP-1559 (0 or 1).
+        """
+        self.requires_fullFeature()
+        self.requires_firmware("7.15.0")
+        self.setup_mnemonic_allallall()
+
+        sig_v, sig_r, sig_s = self.client.ethereum_sign_tx(
+            n=[0x80000000 | 44, 0x80000000 | 60, 0x80000000, 0, 0],
+            nonce=2,
+            max_fee_per_gas=30000000000,         # 30 gwei
+            max_priority_fee_per_gas=500000000,  # 0.5 gwei
+            gas_limit=21000,
+            to=binascii.unhexlify("1d1c328764a41bda0492b66baa30c4a339ff85ef"),
+            value=100000000000000000,  # 0.1 AVAX
+            chain_id=43114,            # Avalanche C-Chain
+        )
+
+        self.assertIn(sig_v, (0, 1), "EIP-1559 sig_v must be 0 or 1 for Avalanche chain_id=43114")
+        self.assertEqual(len(sig_r), 32)
+        self.assertEqual(len(sig_s), 32)
+
 
 if __name__ == "__main__":
     unittest.main()

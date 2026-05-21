@@ -151,6 +151,48 @@ class TestMsgRippleSignTx(common.KeepKeyTest):
             "plain send must not contain Memos array (0xF9 marker)"
         )
 
+    # ------------------------------------------------------------------ #
+    # Regression: feat/ripple-memo — memo field, backward compat          #
+    # Firmware 7.14.2 added optional memo (field 7) to RippleSignTx.      #
+    # A tx without memo must still produce the same serialized bytes as   #
+    # before — adding an optional field must not change existing encodings.#
+    # ------------------------------------------------------------------ #
+
+    def test_ripple_sign_no_memo_backward_compat(self):
+        """Regression for feat/ripple-memo — signing without memo must be byte-identical to pre-7.14.2.
+
+        The Memos field is optional.  Omitting it must not change the
+        serialized transaction encoding (no trailing 0xF9 marker).
+        The expected serialized_tx is pinned from the original test_sign test.
+        """
+        self.requires_fullFeature()
+        self.requires_firmware("7.14.2")
+        self.setup_mnemonic_allallall()
+
+        msg = messages.RippleSignTx(
+            address_n=parse_path("m/44'/144'/0'/0/0"),
+            payment=messages.RipplePayment(
+                amount=100000000,
+                destination="rBKz5MC2iXdoS3XgnNSYmF69K1Yo4NS3Ws",
+            ),
+            flags=0x80000000,
+            fee=100000,
+            sequence=25,
+            # memo field intentionally absent
+        )
+        resp = self.client.call(msg)
+
+        # Must match the serialized bytes from the pre-memo firmware exactly
+        self.assertEqual(
+            binascii.hexlify(resp.serialized_tx),
+            "12000022800000002400000019614000000005f5e1006840000000000186a0732102131facd1eab748d6cddc492f54b04e8c35658894f4add2232ebc5afe7521dbe474473045022100e243ef623675eeeb95965c35c3e06d63a9fc68bb37e17dc87af9c0af83ec057e02206ca8aa5eaab8396397aef6d38d25710441faf7c79d292ee1d627df15ad9346c081148fb40e1ffa5d557ce9851a535af94965e0dd098883147148ebebf7304ccdf1676fefcf9734cf1e780826",
+        )
+        # No Memos STArray marker (0xF9) should appear in the output
+        self.assertFalse(
+            b'\xf9' in resp.serialized_tx,
+            "Plain send without memo must not contain XRPL Memos array (0xF9 marker)",
+        )
+
     def test_ripple_sign_invalid_fee(self):
         self.requires_fullFeature()
         self.requires_firmware("6.4.0")
