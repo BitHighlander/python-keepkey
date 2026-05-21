@@ -505,8 +505,11 @@ class DebugLinkMixin(object):
         if self.verbose:
             log("ButtonRequest code: " + get_buttonrequest_value(msg.code))
 
-        # Capture OLED screenshot BEFORE pressing button (confirmation screen)
-        self._capture_oled()
+        # Capture OLED screenshot BEFORE pressing button (confirmation screen).
+        # Some low-level signing gates are not user-value displays; callers can
+        # suppress only those while preserving screenshots for output/fee UI.
+        if not getattr(self, '_suppress_button_screenshots', False):
+            self._capture_oled()
 
         if self.auto_button:
             if self.verbose:
@@ -1807,22 +1810,29 @@ class ProtocolMixin(object):
                         "Zcash transparent output failed at index %d: %s"
                         % (i, resp.message))
 
-            for i in range(n_transparent_inputs):
-                if not isinstance(resp, zcash_proto.ZcashTransparentAck):
-                    raise Exception(
-                        "Expected ZcashTransparentAck before transparent input %d, got %s"
-                        % (i, type(resp).__name__))
-                if not resp.HasField('next_input_index') or resp.next_input_index != i:
-                    raise Exception(
-                        "Device requested transparent input %s but host expected %d"
-                        % (getattr(resp, 'next_input_index', None), i))
-                inp = dict(transparent_inputs[i])
-                inp['index'] = i
-                resp = self.call(zcash_proto.ZcashTransparentInput(**inp))
-                if isinstance(resp, proto.Failure):
-                    raise Exception(
-                        "Zcash transparent signing failed at input %d: %s"
-                        % (i, resp.message))
+            old_suppressed = getattr(self, '_suppress_button_screenshots',
+                                     False)
+            if n_transparent_inputs > 0:
+                self._suppress_button_screenshots = True
+            try:
+                for i in range(n_transparent_inputs):
+                    if not isinstance(resp, zcash_proto.ZcashTransparentAck):
+                        raise Exception(
+                            "Expected ZcashTransparentAck before transparent input %d, got %s"
+                            % (i, type(resp).__name__))
+                    if not resp.HasField('next_input_index') or resp.next_input_index != i:
+                        raise Exception(
+                            "Device requested transparent input %s but host expected %d"
+                            % (getattr(resp, 'next_input_index', None), i))
+                    inp = dict(transparent_inputs[i])
+                    inp['index'] = i
+                    resp = self.call(zcash_proto.ZcashTransparentInput(**inp))
+                    if isinstance(resp, proto.Failure):
+                        raise Exception(
+                            "Zcash transparent signing failed at input %d: %s"
+                            % (i, resp.message))
+            finally:
+                self._suppress_button_screenshots = old_suppressed
 
             if n_transparent_inputs > 0:
                 if not isinstance(resp, zcash_proto.ZcashTransparentSigned):
