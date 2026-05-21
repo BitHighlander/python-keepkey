@@ -1715,8 +1715,10 @@ class ProtocolMixin(object):
         feeding Orchard actions one at a time.
         Phase 3: If transparent inputs/outputs are provided, streams all
         transparent outputs first and all inputs second. Firmware verifies the
-        transparent digest and returns transparent signatures before Orchard
-        action streaming begins.
+        transparent digest and begins Orchard streaming. Transparent ECDSA
+        signatures are released at the final approval gate (after Orchard
+        digest verification and fee confirmation), immediately before
+        ZcashSignedPCZT.
 
         Args:
             address_n: ZIP-32 derivation path [32', 133', account']
@@ -1740,7 +1742,9 @@ class ProtocolMixin(object):
             transparent_outputs: plaintext transparent output dicts
 
         Returns:
-            ZcashSignedPCZT with .signatures list and optional .txid
+            (ZcashSignedPCZT, ZcashTransparentSigned | None) — Orchard RedPallas
+            signatures and, for hybrid transactions, the deferred ECDSA transparent
+            signatures released at the same final approval gate.
         """
         n_actions = len(actions)
         if n_actions == 0:
@@ -1834,23 +1838,15 @@ class ProtocolMixin(object):
             finally:
                 self._suppress_button_screenshots = old_suppressed
 
-            if n_transparent_inputs > 0:
-                if not isinstance(resp, zcash_proto.ZcashTransparentSigned):
-                    raise Exception(
-                        "Expected ZcashTransparentSigned after transparent inputs, got %s"
-                        % type(resp).__name__)
-                if len(resp.signatures) != n_transparent_inputs:
-                    raise Exception(
-                        "Device returned %d transparent signatures, expected %d"
-                        % (len(resp.signatures), n_transparent_inputs))
-                resp = self.call(zcash_proto.ZcashPCZTAction(index=0, **actions[0]))
-                next_orchard = 1
-            else:
-                if not isinstance(resp, zcash_proto.ZcashPCZTActionAck):
-                    raise Exception(
-                        "Expected ZcashPCZTActionAck after transparent outputs, got %s"
-                        % type(resp).__name__)
-                next_orchard = 0
+            # Firmware defers transparent ECDSA sigs until the final approval gate
+            # (after Orchard digest verification + fee confirmation).  It sends
+            # ZcashPCZTActionAck(0) here regardless of whether there are transparent
+            # inputs or only transparent outputs.
+            if not isinstance(resp, zcash_proto.ZcashPCZTActionAck):
+                raise Exception(
+                    "Expected ZcashPCZTActionAck to begin Orchard loop, got %s"
+                    % type(resp).__name__)
+            next_orchard = 0
         else:
             next_orchard = 0
 
@@ -1872,10 +1868,24 @@ class ProtocolMixin(object):
         if isinstance(resp, proto.Failure):
             raise Exception("Zcash signing failed: %s" % resp.message)
 
+        # For hybrid transactions the firmware sends ZcashTransparentSigned
+        # immediately before ZcashSignedPCZT at the same final approval gate.
+        transparent_signed = None
+        if isinstance(resp, zcash_proto.ZcashTransparentSigned):
+            if len(resp.signatures) != n_transparent_inputs:
+                raise Exception(
+                    "Device returned %d transparent signatures, expected %d"
+                    % (len(resp.signatures), n_transparent_inputs))
+            transparent_signed = resp
+            # Read the ZcashSignedPCZT that follows immediately.
+            resp = self.transport.read_blocking()
+            if isinstance(resp, proto.Failure):
+                raise Exception("Zcash signing failed: %s" % resp.message)
+
         if not isinstance(resp, zcash_proto.ZcashSignedPCZT):
             raise Exception("Unexpected response type: %s" % type(resp).__name__)
 
-        return resp
+        return resp, transparent_signed
 
 class KeepKeyClient(ProtocolMixin, TextUIMixin, BaseClient):
     pass
