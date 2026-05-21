@@ -86,6 +86,77 @@ class TestMsgEthereumSigntxERC20(common.KeepKeyTest):
         self.assertEqual(binascii.hexlify(sig_r), '3671acb6aed5241948de56635ef64554d5e834355e99d806c4ae30bf463eae57')
         self.assertEqual(binascii.hexlify(sig_s), '2b0aa2fdfabefb4ae687f3418b13cddf1111e62338bc8fd3ca4e0196352bb6f8')
 
+    # ------------------------------------------------------------------ #
+    # Regression: fix/token-chain-id — uint8_t overflow for chain_id>255 #
+    # ERC-20 token lookup used a uint8_t for chain_id, silently wrapping  #
+    # for Arbitrum (42161), Base (8453), and Avalanche (43114).           #
+    # ------------------------------------------------------------------ #
+
+    def test_erc20_transfer_arbitrum(self):
+        """Regression for fix/token-chain-id — ERC-20 transfer on Arbitrum One.
+
+        chain_id=42161 previously overflowed uint8_t in the token lookup table,
+        causing the display to show the wrong (or no) token name.  This test
+        verifies signing completes without error on Arbitrum.
+        """
+        self.requires_fullFeature()
+        self.requires_firmware("7.15.0")
+        self.setup_mnemonic_allallall()
+
+        # USDT on Arbitrum One (0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9)
+        # transfer(address,uint256): 0xa9059cbb + padded recipient + amount
+        recipient = '0000000000000000000000001d1c328764a41bda0492b66baa30c4a339ff85ef'
+        amount    = '000000000000000000000000000000000000000000000000000000003b9aca00'  # 1000 USDT (6 dec)
+        transfer_data = binascii.unhexlify('a9059cbb' + recipient + amount)
+
+        sig_v, sig_r, sig_s = self.client.ethereum_sign_tx(
+            n=[0x80000000 | 44, 0x80000000 | 60, 0x80000000, 0, 0],
+            nonce=0,
+            gas_price=100000000,  # 0.1 gwei (Arbitrum is cheap)
+            gas_limit=65000,
+            value=0,
+            to=binascii.unhexlify('fd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9'),
+            chain_id=42161,       # Arbitrum One
+            data=transfer_data,
+        )
+
+        # EIP-155 replay protection: v = 2*chain_id + 35 or 36 = 84357 or 84358
+        self.assertIn(sig_v, (84357, 84358),
+                      "Expected EIP-155 v for Arbitrum chain_id=42161, got %d" % sig_v)
+        self.assertEqual(len(sig_r), 32)
+        self.assertEqual(len(sig_s), 32)
+
+    def test_erc20_transfer_base(self):
+        """Regression for fix/token-chain-id — ERC-20 transfer on Base (chain_id=8453).
+
+        chain_id=8453 also overflowed the uint8_t token lookup.
+        """
+        self.requires_fullFeature()
+        self.requires_firmware("7.15.0")
+        self.setup_mnemonic_allallall()
+
+        # USDC on Base (0x833589fcd6edb6e08f4c7c32d4f71b54bda02913)
+        recipient = '0000000000000000000000001d1c328764a41bda0492b66baa30c4a339ff85ef'
+        amount    = '0000000000000000000000000000000000000000000000000000000000989680'  # 10 USDC
+        transfer_data = binascii.unhexlify('a9059cbb' + recipient + amount)
+
+        sig_v, sig_r, sig_s = self.client.ethereum_sign_tx(
+            n=[0x80000000 | 44, 0x80000000 | 60, 0x80000000, 0, 0],
+            nonce=0,
+            gas_price=50000000,   # 0.05 gwei
+            gas_limit=65000,
+            value=0,
+            to=binascii.unhexlify('833589fcd6edb6e08f4c7c32d4f71b54bda02913'),
+            chain_id=8453,        # Base
+            data=transfer_data,
+        )
+
+        # EIP-155: v = 2*8453 + 35 or 36 = 16941 or 16942
+        self.assertIn(sig_v, (16941, 16942),
+                      "Expected EIP-155 v for Base chain_id=8453, got %d" % sig_v)
+        self.assertEqual(len(sig_r), 32)
+        self.assertEqual(len(sig_s), 32)
+
 
 if __name__ == '__main__':
     unittest.main()
