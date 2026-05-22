@@ -346,6 +346,44 @@ class TestMsgTonSignTx(common.KeepKeyTest):
             "Different account paths must produce different signatures"
         )
 
+    # ------------------------------------------------------------------ #
+    # Regression: fix/ton-blind-sign                                      #
+    # The blind-sign display was changed in 7.15.  This verifies the      #
+    # signing flow still completes end-to-end after the UX change.        #
+    # ------------------------------------------------------------------ #
+
+    def test_ton_blind_sign_still_completes_after_ux_fix(self):
+        """Regression for fix/ton-blind-sign — blind-sign flow still produces a 64-byte signature.
+
+        The 7.15 fix changed what is displayed on the OLED during TON blind
+        signing (new warning screen / layout change).  This test verifies the
+        functional path was not accidentally broken: the device must still
+        return a 64-byte Ed25519 signature when given a valid raw_tx payload
+        (64-byte = blind-sign path, not the 32-byte hash path).
+        """
+        self.requires_fullFeature()
+        self.requires_firmware("7.15.0")
+        self.setup_mnemonic_allallall()
+
+        dest_addr = make_ton_address()
+        # 64-byte raw_tx triggers the blind-sign code path
+        raw_tx = hashlib.sha256(b'regression-fix-ton-blind-sign').digest() * 2
+
+        msg = ton_messages.TonSignTx(
+            address_n=parse_path(TON_PATH),
+            raw_tx=raw_tx,
+            to_address=dest_addr,
+            amount=1000000000,  # 1 TON
+            seqno=42,
+            expire_at=1700000000,
+        )
+        resp = self.client.call(msg)
+
+        # Functional check: signing must still complete and return a valid 64-byte signature
+        self.assertEqual(len(resp.signature), 64)
+        self.assertFalse(all(b == 0 for b in resp.signature),
+                         "Signature must not be all-zero bytes")
+
 
 if __name__ == '__main__':
     unittest.main()

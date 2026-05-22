@@ -73,7 +73,7 @@ class TestMsgEthereumThorchainDeposit(common.KeepKeyTest):
             chain_id=1,
             data=data,
         )
-        self.assertIn(sig_v, [27, 28])
+        self.assertIn(sig_v, [37, 38])  # EIP-155 with chain_id=1: v = 35 + chain_id*2 + recovery
         self.assertEqual(len(sig_r), 32)
         self.assertEqual(len(sig_s), 32)
 
@@ -103,7 +103,7 @@ class TestMsgEthereumThorchainDeposit(common.KeepKeyTest):
             chain_id=1,
             data=data,
         )
-        self.assertIn(sig_v, [27, 28])
+        self.assertIn(sig_v, [37, 38])  # EIP-155 with chain_id=1: v = 35 + chain_id*2 + recovery
         self.assertEqual(len(sig_r), 32)
         self.assertEqual(len(sig_s), 32)
 

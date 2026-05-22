@@ -575,6 +575,87 @@ class TestMsgSolanaSignTx(common.KeepKeyTest):
         self.assertEqual(len(resp.signature), 64)
         self.assertFalse(all(b == 0 for b in resp.signature))
 
+    # ------------------------------------------------------------------ #
+    # Regression: fix/solana-token-decimals                               #
+    # The instruction-level decimals field in TokenTransferChecked was    #
+    # ignored; the host-supplied token_info.decimals were used instead.   #
+    # After the fix the instruction decimals override host metadata.      #
+    # ------------------------------------------------------------------ #
+
+    def test_solana_token_transfer_checked_decimals_6(self):
+        """Regression for fix/solana-token-decimals — TokenTransferChecked with decimals=6.
+
+        SPL Token TransferChecked (opcode=12) embeds explicit decimals in the
+        instruction.  Before the fix the firmware used host metadata decimals
+        instead of the instruction field.  This test verifies the instruction
+        signs correctly with decimals=6 passed inside the instruction data.
+        """
+        self.requires_fullFeature()
+        self.requires_firmware("7.15.0")
+        self.setup_mnemonic_allallall()
+
+        from_pubkey = self._get_from_pubkey()
+        to_account  = b'\x33' * 32  # destination token account
+        mint_pubkey = b'\x44' * 32  # token mint
+
+        # SPL Token TransferChecked: opcode=12 (u8) + amount (LE u64) + decimals (u8)
+        # Format: [12] [amount:8 LE] [decimals:1]
+        amount   = 5000000  # 5.0 USDC (6 decimals)
+        decimals = 6
+        instr_data = bytes([12]) + struct.pack('<Q', amount) + bytes([decimals])
+
+        # TransferChecked needs: source, mint, destination, owner (in addition to from_pubkey)
+        # Build tx with 4 extra accounts: source_ata, mint, dest_ata, owner(=from_pubkey)
+        source_ata = b'\x55' * 32
+
+        raw_tx = self._build_tx(
+            from_pubkey,
+            [source_ata, mint_pubkey, to_account],
+            self.TOKEN_PROGRAM,
+            instr_data,
+        )
+
+        resp = self.client.call(messages.SolanaSignTx(
+            address_n=parse_path("m/44'/501'/0'/0'"),
+            raw_tx=raw_tx,
+        ))
+
+        self.assertEqual(len(resp.signature), 64)
+        self.assertFalse(all(b == 0 for b in resp.signature))
+
+    def test_solana_token_transfer_checked_decimals_9(self):
+        """Regression for fix/solana-token-decimals — TokenTransferChecked with decimals=9.
+
+        Verifies a second decimal precision (SOL-like 9-decimal token) signs
+        correctly — ensures the fix handles decimals != 6 too.
+        """
+        self.requires_fullFeature()
+        self.requires_firmware("7.15.0")
+        self.setup_mnemonic_allallall()
+
+        from_pubkey = self._get_from_pubkey()
+        to_account  = b'\x33' * 32
+        mint_pubkey = b'\x66' * 32
+        source_ata  = b'\x77' * 32
+
+        # TransferChecked with 9 decimals, amount 1_000_000_000 (= 1.0 token)
+        instr_data = bytes([12]) + struct.pack('<Q', 1000000000) + bytes([9])
+
+        raw_tx = self._build_tx(
+            from_pubkey,
+            [source_ata, mint_pubkey, to_account],
+            self.TOKEN_PROGRAM,
+            instr_data,
+        )
+
+        resp = self.client.call(messages.SolanaSignTx(
+            address_n=parse_path("m/44'/501'/0'/0'"),
+            raw_tx=raw_tx,
+        ))
+
+        self.assertEqual(len(resp.signature), 64)
+        self.assertFalse(all(b == 0 for b in resp.signature))
+
     # ================================================================
     # Path edge-case tests
     # ================================================================

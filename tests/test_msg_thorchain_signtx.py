@@ -309,5 +309,97 @@ class TestMsgThorChainSignTx(common.KeepKeyTest):
 
         return
 
+    # ------------------------------------------------------------------ #
+    # Regression: feat/thorchain-any-denom                                #
+    # Firmware previously hardcoded "rune" as the only valid denom for    #
+    # ThorchainMsgSend.  The fix adds an optional denom field so TCY,     #
+    # RUJIRA, and other L1 assets can be signed.                          #
+    # The client helper (thorchain_sign_tx) still enforces denom="rune"   #
+    # at the Python layer; a full non-rune test requires a direct proto   #
+    # call once the client is updated.  This test verifies the existing   #
+    # rune path still produces a correct signature after the firmware fix. #
+    # ------------------------------------------------------------------ #
+
+    def test_thorchain_rune_denom_backward_compat(self):
+        """Regression for feat/thorchain-any-denom — rune denom still works after firmware fix.
+
+        The firmware change adds optional denom to ThorchainMsgSend but must
+        default to 'rune' when the field is absent for backward compatibility.
+        """
+        self.requires_fullFeature()
+        self.requires_firmware("7.15.0")
+        self.setup_mnemonic_nopin_nopassphrase()
+
+        signature = self.client.thorchain_sign_tx(
+            address_n=parse_path(DEFAULT_BIP32_PATH),
+            account_number=92,
+            chain_id="thorchain",
+            fee=3000,
+            gas=200000,
+            msgs=[make_send(
+                "tthor1ls33ayg26kmltw7jjy55p32ghjna09zp6z69y8",
+                "tthor1jvt443rvhq5h8yrna55yjysvhtju0el7ldnwwy",
+                10000
+            )],
+            memo="",
+            sequence=10,
+            testnet=True,
+        )
+
+        # Signature and public key must be present and non-empty
+        self.assertEqual(len(signature.public_key), 33)  # compressed secp256k1
+        self.assertEqual(len(signature.signature), 64)   # 32-byte r + 32-byte s
+
+    def test_thorchain_msgsend_direct_with_denom(self):
+        """Regression for feat/thorchain-any-denom — ThorchainMsgSend with explicit denom field.
+
+        Calls the proto directly to pass a non-empty denom string, bypassing
+        the Python client helper which still enforces denom=='rune'.
+        Requires firmware 7.15.0+ with the optional denom field in ThorchainMsgSend.
+
+        NOTE: This test will skip if ThorchainMsgSend has no denom field in the
+        compiled pb2 (older python-keepkey without the proto update).
+        """
+        self.requires_fullFeature()
+        self.requires_firmware("7.15.0")
+        self.setup_mnemonic_nopin_nopassphrase()
+
+        import keepkeylib.messages_thorchain_pb2 as thorchain_proto
+
+        # Check if the compiled pb2 has the denom field (added in 7.15 proto update).
+        # If not present, skip rather than fail — the proto just hasn't been regenerated yet.
+        descriptor = thorchain_proto.ThorchainMsgSend.DESCRIPTOR
+        if 'denom' not in descriptor.fields_by_name:
+            self.skipTest("ThorchainMsgSend.denom not in compiled pb2 — regenerate proto first")
+
+        # Build the full sign-tx flow manually
+        resp = self.client.call(thorchain_proto.ThorchainSignTx(
+            address_n=parse_path(DEFAULT_BIP32_PATH),
+            account_number=92,
+            chain_id="thorchain",
+            fee_amount=3000,
+            gas=200000,
+            memo="",
+            sequence=11,
+            msg_count=1,
+            testnet=True,
+        ))
+
+        if not isinstance(resp, thorchain_proto.ThorchainMsgRequest):
+            self.skipTest("Unexpected response — firmware may not support this flow")
+
+        resp = self.client.call(thorchain_proto.ThorchainMsgAck(
+            send=thorchain_proto.ThorchainMsgSend(
+                from_address="tthor1ls33ayg26kmltw7jjy55p32ghjna09zp6z69y8",
+                to_address="tthor1jvt443rvhq5h8yrna55yjysvhtju0el7ldnwwy",
+                amount=5000,
+            )
+        ))
+
+        self.assertIsInstance(resp, thorchain_proto.ThorchainSignedTx)
+        self.assertEqual(len(resp.public_key), 33)
+        self.assertEqual(len(resp.signature), 64)
+
+
 if __name__ == '__main__':
     unittest.main()

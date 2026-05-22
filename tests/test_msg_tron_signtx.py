@@ -240,6 +240,40 @@ class TestMsgTronSignTx(common.KeepKeyTest):
             "Different account paths must produce different signatures"
         )
 
+    # ------------------------------------------------------------------ #
+    # Regression: fix/tron-blind-sign                                     #
+    # The blind-sign display was changed in 7.15.  This verifies the      #
+    # signing flow still completes end-to-end after the UX change.        #
+    # ------------------------------------------------------------------ #
+
+    def test_tron_blind_sign_still_completes_after_ux_fix(self):
+        """Regression for fix/tron-blind-sign — blind-sign flow still produces a 65-byte signature.
+
+        The 7.15 fix changed what is displayed on the OLED during TRON blind
+        signing (new warning screen / layout change).  This test ensures the
+        functional path was not accidentally broken: the device must still
+        return a 65-byte ECDSA signature when given a valid raw_data payload.
+        """
+        self.requires_fullFeature()
+        self.requires_firmware("7.15.0")
+        self.setup_mnemonic_allallall()
+
+        raw_data = binascii.unhexlify(
+            '0a02abcd2208424242424242424240'
+            '80e8ded785315a67'
+        )
+
+        msg = tron_messages.TronSignTx(
+            address_n=parse_path("m/44'/195'/0'/0/0"),
+            raw_data=raw_data,
+        )
+        resp = self.client.call(msg)
+
+        # Functional check: signing must still complete and return a valid signature
+        self.assertEqual(len(resp.signature), 65)
+        self.assertFalse(all(b == 0 for b in resp.signature),
+                         "Signature must not be all-zero bytes")
+
 
 if __name__ == '__main__':
     unittest.main()
