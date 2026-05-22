@@ -270,8 +270,7 @@ class TestMsgTronSignTx(common.KeepKeyTest):
         resp = self.client.call(msg)
 
         # Functional check: signing must still complete and return a valid signature
-        self.assertEqual(len(resp.signature), 65,
-                         "TRON blind-sign must return a 65-byte signature after fix/tron-blind-sign UX change")
+        self.assertEqual(len(resp.signature), 65)
         self.assertFalse(all(b == 0 for b in resp.signature),
                          "Signature must not be all-zero bytes")
 

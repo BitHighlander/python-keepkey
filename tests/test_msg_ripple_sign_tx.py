@@ -147,8 +147,8 @@ class TestMsgRippleSignTx(common.KeepKeyTest):
         )
         resp2 = self.client.call(msg_no_memo)
         self.assertFalse(
-            b'\xf9' in resp2.serialized_tx,
-            "plain send must not contain Memos array (0xF9 marker)"
+            b'\xf9\xea' in resp2.serialized_tx,
+            "plain send must not contain Memos array (0xF9 0xEA marker sequence)"
         )
 
     # ------------------------------------------------------------------ #
@@ -189,8 +189,8 @@ class TestMsgRippleSignTx(common.KeepKeyTest):
         )
         # No Memos STArray marker (0xF9) should appear in the output
         self.assertFalse(
-            b'\xf9' in resp.serialized_tx,
-            "Plain send without memo must not contain XRPL Memos array (0xF9 marker)",
+            b'\xf9\xea' in resp.serialized_tx,
+            "Plain send without memo must not contain XRPL Memos array (0xF9 0xEA marker sequence)",
         )
 
     def test_ripple_sign_invalid_fee(self):

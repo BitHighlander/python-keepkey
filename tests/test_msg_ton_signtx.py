@@ -380,8 +380,7 @@ class TestMsgTonSignTx(common.KeepKeyTest):
         resp = self.client.call(msg)
 
         # Functional check: signing must still complete and return a valid 64-byte signature
-        self.assertEqual(len(resp.signature), 64,
-                         "TON blind-sign must return a 64-byte Ed25519 signature after fix/ton-blind-sign UX change")
+        self.assertEqual(len(resp.signature), 64)
         self.assertFalse(all(b == 0 for b in resp.signature),
                          "Signature must not be all-zero bytes")
 

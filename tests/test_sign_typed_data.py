@@ -72,7 +72,7 @@ class TestEIP712Security(common.KeepKeyTest):
             "f2cee375fa42b42143804025fc449deafd50cc031ca257e0b194a650a912090f"
         )
         message_hash = binascii.unhexlify(
-            "2d7a851c2b6942cbca9ca80b9b4e7ac6e00d0f17b3e8e3d0b2faa5a15f17de6"
+            "02d7a851c2b6942cbca9ca80b9b4e7ac6e00d0f17b3e8e3d0b2faa5a15f17de6"
         )
 
         retval = self.client.ethereum_sign_typed_data_hash(
