@@ -100,10 +100,16 @@ for wire_id, (msg_name, mod) in _zcash_wire_ids.items():
 
 # Manually register Hive messages (not in the old messages_pb2.py enum)
 _hive_wire_ids = {
-    1600: ('HiveGetPublicKey', hive_proto),
-    1601: ('HivePublicKey', hive_proto),
-    1602: ('HiveSignTx', hive_proto),
-    1603: ('HiveSignedTx', hive_proto),
+    1600: ('HiveGetPublicKey',        hive_proto),
+    1601: ('HivePublicKey',           hive_proto),
+    1602: ('HiveSignTx',              hive_proto),
+    1603: ('HiveSignedTx',            hive_proto),
+    1604: ('HiveGetPublicKeys',       hive_proto),
+    1605: ('HivePublicKeys',          hive_proto),
+    1606: ('HiveSignAccountCreate',   hive_proto),
+    1607: ('HiveSignedAccountCreate', hive_proto),
+    1608: ('HiveSignAccountUpdate',   hive_proto),
+    1609: ('HiveSignedAccountUpdate', hive_proto),
 }
 for wire_id, (msg_name, mod) in _hive_wire_ids.items():
     msg_class = getattr(mod, msg_name, None)
