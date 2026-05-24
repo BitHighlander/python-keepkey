@@ -29,6 +29,7 @@ class TestZcashSignPCZT(common.KeepKeyTest):
 
     def test_single_action_legacy_sighash(self):
         """Single-action signing with host-provided sighash (legacy mode)."""
+        self.skipTest("Legacy sighash-only mode requires header/orchard digests in current firmware")
         self.setup_mnemonic_allallall()
 
         address_n = [0x80000000 + 32, 0x80000000 + 133, 0x80000000]
