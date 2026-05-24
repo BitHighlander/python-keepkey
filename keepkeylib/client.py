@@ -49,6 +49,7 @@ from . import messages_solana_pb2 as solana_proto
 from . import messages_tron_pb2 as tron_proto
 from . import messages_ton_pb2 as ton_proto
 from . import messages_zcash_pb2 as zcash_proto
+from . import messages_hive_pb2 as hive_proto
 from . import types_pb2 as types
 from . import eos
 from . import nano
@@ -1851,6 +1852,74 @@ class ProtocolMixin(object):
             raise Exception("Unexpected response type: %s" % type(resp))
 
         return resp
+
+    # ── Hive ────────────────────────────────────────────────────
+    @expect(hive_proto.HivePublicKey)
+    def hive_get_public_key(self, address_n, show_display=False, role=None):
+        kwargs = dict(address_n=address_n, show_display=show_display)
+        if role is not None:
+            kwargs['role'] = role
+        return self.call(hive_proto.HiveGetPublicKey(**kwargs))
+
+    @expect(hive_proto.HivePublicKeys)
+    def hive_get_public_keys(self, account_index=0, show_display=False):
+        return self.call(
+            hive_proto.HiveGetPublicKeys(account_index=account_index, show_display=show_display)
+        )
+
+    @expect(hive_proto.HiveSignedTx)
+    def hive_sign_tx(self, address_n, chain_id, ref_block_num, ref_block_prefix,
+                     expiration, sender, recipient, amount, decimals, asset_symbol, memo=''):
+        return self.call(hive_proto.HiveSignTx(**{
+            'address_n': address_n,
+            'chain_id': chain_id,
+            'ref_block_num': ref_block_num,
+            'ref_block_prefix': ref_block_prefix,
+            'expiration': expiration,
+            'from': sender,
+            'to': recipient,
+            'amount': amount,
+            'decimals': decimals,
+            'asset_symbol': asset_symbol,
+            'memo': memo,
+        }))
+
+    @expect(hive_proto.HiveSignedAccountCreate)
+    def hive_sign_account_create(self, address_n, chain_id, ref_block_num, ref_block_prefix,
+                                 expiration, creator, new_account_name, fee_amount=3000,
+                                 owner_key='', active_key='', posting_key='', memo_key=''):
+        return self.call(hive_proto.HiveSignAccountCreate(
+            address_n=address_n,
+            chain_id=chain_id,
+            ref_block_num=ref_block_num,
+            ref_block_prefix=ref_block_prefix,
+            expiration=expiration,
+            creator=creator,
+            new_account_name=new_account_name,
+            fee_amount=fee_amount,
+            owner_key=owner_key,
+            active_key=active_key,
+            posting_key=posting_key,
+            memo_key=memo_key,
+        ))
+
+    @expect(hive_proto.HiveSignedAccountUpdate)
+    def hive_sign_account_update(self, address_n, chain_id, ref_block_num, ref_block_prefix,
+                                 expiration, account,
+                                 new_owner_key='', new_active_key='',
+                                 new_posting_key='', new_memo_key=''):
+        return self.call(hive_proto.HiveSignAccountUpdate(
+            address_n=address_n,
+            chain_id=chain_id,
+            ref_block_num=ref_block_num,
+            ref_block_prefix=ref_block_prefix,
+            expiration=expiration,
+            account=account,
+            new_owner_key=new_owner_key,
+            new_active_key=new_active_key,
+            new_posting_key=new_posting_key,
+            new_memo_key=new_memo_key,
+        ))
 
 class KeepKeyClient(ProtocolMixin, TextUIMixin, BaseClient):
     pass
