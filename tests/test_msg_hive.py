@@ -165,7 +165,7 @@ class TestMsgHive(common.KeepKeyTest):
         keys = [resp.owner_key, resp.active_key, resp.memo_key, resp.posting_key]
         for k in keys:
             self.assertTrue(k.startswith("STM"), "expected STM-prefixed key, got %r" % k)
-        self.assertEqual(len(set(keys)), 4, "the four role keys must be distinct")
+        self.assertEqual(len(set(keys)), 4)
 
         # The single-key path must agree with the bulk path for the active role.
         single = hive.get_public_key(self.client, hive_path(ROLE_ACTIVE), show_display=False)
@@ -252,10 +252,10 @@ class TestMsgHive(common.KeepKeyTest):
         self.assertEqual(r.asset(), (3000, 3, "HIVE"))     # fee
         self.assertEqual(r.string(), b"kksponsor")          # creator
         self.assertEqual(r.string(), b"kktestacct")         # new_account_name
-        self.assertEqual(r.authority(), raw[ROLE_OWNER], "owner authority slot")
-        self.assertEqual(r.authority(), raw[ROLE_ACTIVE], "active authority slot")
-        self.assertEqual(r.authority(), raw[ROLE_POSTING], "posting authority slot")
-        self.assertEqual(r.take(33), raw[ROLE_MEMO], "memo_key slot")
+        self.assertEqual(r.authority(), raw[ROLE_OWNER])
+        self.assertEqual(r.authority(), raw[ROLE_ACTIVE])
+        self.assertEqual(r.authority(), raw[ROLE_POSTING])
+        self.assertEqual(r.take(33), raw[ROLE_MEMO])
         self.assertEqual(r.string(), b"")                   # json_metadata
         self.assertEqual(r.varint(), 0)                     # extensions
         r.assert_end()
@@ -295,9 +295,9 @@ class TestMsgHive(common.KeepKeyTest):
         self.assertEqual((ref_num, ref_prefix, expiration), (12345, 67890, 1700000000))
         self.assertEqual(r.string(), b"kktestacct")          # account
         for role, label in ((ROLE_OWNER, "owner"), (ROLE_ACTIVE, "active"), (ROLE_POSTING, "posting")):
-            self.assertEqual(r.u8(), 0x01, "%s optional-present flag" % label)
-            self.assertEqual(r.authority(), raw[role], "%s authority slot" % label)
-        self.assertEqual(r.take(33), raw[ROLE_MEMO], "memo_key slot")
+            self.assertEqual(r.u8(), 0x01)
+            self.assertEqual(r.authority(), raw[role])
+        self.assertEqual(r.take(33), raw[ROLE_MEMO])
         self.assertEqual(r.string(), b"")                    # json_metadata
         self.assertEqual(r.varint(), 0)                      # extensions
         r.assert_end()
