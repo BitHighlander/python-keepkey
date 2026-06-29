@@ -164,14 +164,12 @@ class TestMsgEthereum0xtxERC20(common.KeepKeyTest):
     # test transformERC20
     def test__sign_transformERC20(self):
         self.requires_fullFeature()
-        # 7.15 behavior change: transformERC20 calldata exceeds the 1024-byte
-        # initial chunk, so the contract clear-sign handler no longer matches
-        # (handlers now require the entire calldata in the first chunk). The tx
-        # goes through the blind-sign path, which requires AdvancedMode. The
-        # signed bytes -- and therefore the signature below -- are unchanged.
-        self.requires_firmware("7.15.0")
+        # transformERC20 is pinned to the 0x ExchangeProxy and bounded by its
+        # displayed input/min-output amounts, so it clear-signs WITHOUT
+        # AdvancedMode at any calldata size (the transformations[] tail exceeds
+        # one chunk). No AdvancedMode policy is set here on purpose.
+        self.requires_firmware("7.1.5")
         self.setup_mnemonic_nopin_nopassphrase()
-        self.client.apply_policy("AdvancedMode", 1)
 
         sig_v, sig_r, sig_s = self.client.ethereum_sign_tx(
             # Data from:
