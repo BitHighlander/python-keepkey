@@ -3235,13 +3235,22 @@ def screenshot_filter(fw_version):
 # version-blind set would fail every older-firmware run for a module that
 # legitimately cannot exist yet.
 MUST_RUN_MODULES = {
-    'test_msg_signtx_taproot': '7.0.0',
-    'test_msg_getaddress_taproot': '7.0.0',
+    # (minimum firmware version, variants that ship the capability)
+    'test_msg_signtx_taproot': ('7.0.0', frozenset(('full', 'bitcoin-only'))),
+    'test_msg_getaddress_taproot': ('7.0.0', frozenset(('full', 'bitcoin-only'))),
     # R-4.1. Gated on requires_message('LoadClearsignSigner'), so if provider
     # loading regressed, all four would skip and the report would certify a
     # feature it never exercised.
-    'test_msg_solana_lut_attestation': '7.15.0',
+    'test_msg_solana_lut_attestation': ('7.15.0', frozenset(('full',))),
 }
+
+
+def _skip_is_required(module, fw_version, variant):
+    requirement = MUST_RUN_MODULES.get(module)
+    if requirement is None:
+        return False
+    min_version, variants = requirement
+    return variant in variants and ver_ge(fw_version, min_version)
 
 def screenshot_audit(fw_version, screenshot_root, junit_path=None):
     """Which SECTIONS tests DECLARED screens but captured none?
@@ -3283,7 +3292,7 @@ def screenshot_audit(fw_version, screenshot_root, junit_path=None):
     return (len(missing) == 0, missing)
 
 
-def validate_junit(fw_version, results):
+def validate_junit(fw_version, results, variant='full'):
     """Check SECTIONS tests against JUnit results. Returns (passed, failed_list).
 
     A test is considered failed if it appears in SECTIONS for this firmware version
@@ -3299,7 +3308,7 @@ def validate_junit(fw_version, results):
             status = _lookup(results, mod, meth)
             if status in ('fail', 'error'):
                 failures.append((tid, mod, meth, status))
-            elif status == 'skip' and ver_ge(fw_version, MUST_RUN_MODULES.get(mod, '99.0.0')):
+            elif status == 'skip' and _skip_is_required(mod, fw_version, variant):
                 failures.append((tid, mod, meth, 'skipped-but-required'))
             elif not status:
                 failures.append((tid, mod, meth, 'missing'))
@@ -3320,6 +3329,8 @@ def main():
                    help='Print pytest -k expression for tests needing screenshots, then exit')
     p.add_argument('--validate-junit', action='store_true',
                    help='Validate JUnit results against SECTIONS, exit non-zero on failures')
+    p.add_argument('--variant', choices=('full', 'bitcoin-only'), default='full',
+                   help='Firmware capability set used to evaluate required tests')
     args = p.parse_args()
 
     fw = args.fw_version
@@ -3347,7 +3358,7 @@ def main():
             print('ERROR: --validate-junit requires --junit=<path>', file=sys.stderr)
             sys.exit(2)
         results = parse_junit(args.junit)
-        ok, failures = validate_junit(fw, results)
+        ok, failures = validate_junit(fw, results, args.variant)
         if ok:
             print(f'SECTIONS validation passed: all tests for fw {fw} are pass or skip')
             sys.exit(0)
