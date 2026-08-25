@@ -75,6 +75,11 @@ class KeepKeyTest(unittest.TestCase):
         self.pin8 = '45678978'
 
         self.client.wipe_device()
+        # The wipe confirmation belongs to the test harness, not the test.
+        # Drop it for every suite, including suites that never call one of the
+        # setup_mnemonic_* helpers; otherwise a presence-only screenshot audit
+        # can mistake this frame for evidence of the behavior under test.
+        self._drop_setup_screenshots()
 
         if VERBOSE:
             print("Setup finished")
@@ -246,4 +251,3 @@ class KeepKeyTest(unittest.TestCase):
         self.skipTest("Bitcoin-only firmware required to run this test")
 
             
-
