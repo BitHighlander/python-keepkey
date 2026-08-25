@@ -356,56 +356,82 @@ class TestMsgSolanaSignTx(common.KeepKeyTest):
 
     def test_solana_sign_stake_authorize_clearsigns(self):
         """StakeAuthorize clear-signs, showing the role (staker/withdrawer) and
-        the new authority."""
+        the new authority. Canonical account layout: [0]=stake account,
+        [1]=Clock sysvar, [2]=[SIGNER] current authority -- the Clock sysvar
+        must be present so the signer lands at the real index 2, not 1."""
         self.requires_fullFeature()
         self.setup_mnemonic_allallall()
         from_pubkey = self._get_from_pubkey()
+        clock_sysvar = b'\xC1' * 32
         current_auth = b'\x77' * 32
         new_auth = b'\x88' * 32
         # Authorize (type=1 LE u32) + new authority(32) + StakeAuthorize role (0=staker)
         instr_data = struct.pack('<I', 1) + new_auth + struct.pack('<I', 0)
-        raw_tx = self._build_tx(from_pubkey, [current_auth], self.STAKE_PROGRAM, instr_data)
-        resp = self.client.call(messages.SolanaSignTx(
-            address_n=parse_path("m/44'/501'/0'/0'"), raw_tx=raw_tx))
-        self.assertEqual(len(resp.signature), 64)
-
-    def test_solana_sign_stake_delegate(self):
-        """Stake delegate — OLED shows 'Delegate stake?'."""
-        self.requires_fullFeature()
-        self.setup_mnemonic_allallall()
-        from_pubkey = self._get_from_pubkey()
-        stake_account = b'\x55' * 32
-        vote_account = b'\x66' * 32
-        # Stake Delegate: type=2 (LE u32)
-        instr_data = struct.pack('<I', 2)
-        raw_tx = self._build_tx(from_pubkey, [stake_account, vote_account],
+        raw_tx = self._build_tx(from_pubkey, [clock_sysvar, current_auth],
                                 self.STAKE_PROGRAM, instr_data)
         resp = self.client.call(messages.SolanaSignTx(
             address_n=parse_path("m/44'/501'/0'/0'"), raw_tx=raw_tx))
         self.assertEqual(len(resp.signature), 64)
 
-    def test_solana_sign_stake_withdraw(self):
-        """Stake withdraw — OLED shows 'Withdraw [amount] from stake?'."""
+    def test_solana_sign_stake_delegate(self):
+        """Stake delegate — OLED shows 'Delegate stake?'. Canonical account
+        layout: [0]=stake account, [1]=vote account, [2]=Clock sysvar,
+        [3]=StakeHistory sysvar, [4]=stake config account, [5]=[SIGNER] stake
+        authority."""
         self.requires_fullFeature()
         self.setup_mnemonic_allallall()
         from_pubkey = self._get_from_pubkey()
-        stake_account = b'\x55' * 32
+        vote_account = b'\x66' * 32
+        clock_sysvar = b'\xC1' * 32
+        stake_history_sysvar = b'\xC2' * 32
+        stake_config = b'\xC3' * 32
+        authority = b'\x99' * 32
+        # Stake Delegate: type=2 (LE u32)
+        instr_data = struct.pack('<I', 2)
+        raw_tx = self._build_tx(
+            from_pubkey,
+            [vote_account, clock_sysvar, stake_history_sysvar, stake_config,
+             authority],
+            self.STAKE_PROGRAM, instr_data)
+        resp = self.client.call(messages.SolanaSignTx(
+            address_n=parse_path("m/44'/501'/0'/0'"), raw_tx=raw_tx))
+        self.assertEqual(len(resp.signature), 64)
+
+    def test_solana_sign_stake_withdraw(self):
+        """Stake withdraw — OLED shows 'Withdraw [amount] from stake?'.
+        Canonical account layout: [0]=stake account, [1]=recipient,
+        [2]=Clock sysvar, [3]=StakeHistory sysvar, [4]=[SIGNER] withdraw
+        authority."""
+        self.requires_fullFeature()
+        self.setup_mnemonic_allallall()
+        from_pubkey = self._get_from_pubkey()
+        recipient = b'\x55' * 32
+        clock_sysvar = b'\xC1' * 32
+        stake_history_sysvar = b'\xC2' * 32
+        authority = b'\x99' * 32
         # Stake Withdraw: type=4 (LE u32) + lamports (LE u64)
         instr_data = struct.pack('<I', 4) + struct.pack('<Q', 2000000000)  # 2 SOL
-        raw_tx = self._build_tx(from_pubkey, [stake_account], self.STAKE_PROGRAM, instr_data)
+        raw_tx = self._build_tx(
+            from_pubkey,
+            [recipient, clock_sysvar, stake_history_sysvar, authority],
+            self.STAKE_PROGRAM, instr_data)
         resp = self.client.call(messages.SolanaSignTx(
             address_n=parse_path("m/44'/501'/0'/0'"), raw_tx=raw_tx))
         self.assertEqual(len(resp.signature), 64)
 
     def test_solana_sign_stake_deactivate(self):
-        """Stake deactivate — OLED shows 'Deactivate stake?'."""
+        """Stake deactivate — OLED shows 'Deactivate stake?'. Canonical
+        account layout: [0]=stake account, [1]=Clock sysvar, [2]=[SIGNER]
+        stake authority."""
         self.requires_fullFeature()
         self.setup_mnemonic_allallall()
         from_pubkey = self._get_from_pubkey()
-        stake_account = b'\x55' * 32
+        clock_sysvar = b'\xC1' * 32
+        authority = b'\x99' * 32
         # Stake Deactivate: type=5 (LE u32)
         instr_data = struct.pack('<I', 5)
-        raw_tx = self._build_tx(from_pubkey, [stake_account], self.STAKE_PROGRAM, instr_data)
+        raw_tx = self._build_tx(from_pubkey, [clock_sysvar, authority],
+                                self.STAKE_PROGRAM, instr_data)
         resp = self.client.call(messages.SolanaSignTx(
             address_n=parse_path("m/44'/501'/0'/0'"), raw_tx=raw_tx))
         self.assertEqual(len(resp.signature), 64)
