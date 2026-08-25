@@ -26,6 +26,11 @@ import keepkeylib.binance as binance
 class TestMsgBinanceSignTx(common.KeepKeyTest):
 
     def setup_binance(self):
+        # Native Binance Beacon Chain signing was deliberately removed from
+        # firmware (#541). Keep these vectors useful for older firmware, but
+        # do not treat an unregistered message on current builds as a signing
+        # regression.
+        self.requires_message("BinanceSignTx")
         self.client.load_device_by_mnemonic(
             mnemonic="offer caution gift cross surge pretty orange during eye soldier popular holiday mention east eight office fashion ill parrot vault rent devote earth cousin",
             pin=self.pin4,
