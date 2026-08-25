@@ -564,10 +564,6 @@ SECTIONS = [
           'domain name. The feature is withdrawn rather than shipped with a screen it could not '
           'vouch for: zero screens, refusal on the wire.',
           []),
-         ('J11', 'test_msg_binance_sign_tx', 'test_transfer',
-          'Binance denom renders in full',
-          'A long denom must render completely and must not overflow the formatting buffer.',
-          ['Transfer screen showing the full denom']),
          ('J12', 'test_msg_ping', 'test_ping_long_body_is_paged',
           'A long body is paged, not clipped',
           'A body that will not fit one screen is shown across several, with the page number '
