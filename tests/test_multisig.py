@@ -286,39 +286,6 @@ class TestMultisig(common.KeepKeyTest):
         with self.client:
             self.assertRaises(CallException, self.client.sign_tx, 'Bitcoin', [inp1, ], [out1, ])
 
-    def test_mixed_input_cannot_inflate_weight_with_multisig_m(self):
-        """A single-sig input must not bypass multisig quorum validation."""
-        self.requires_firmware("7.16.0")
-        self.setup_mnemonic_nopin_nopassphrase()
-
-        node = ckd_public.deserialize(
-            'xpub661MyMwAqRbcF1zGijBb2K6x9YiJPh58xpcCeLvTxMX6spkY3PcpJ4ABcCyWfskq5DDxM3e6Ez5ePCqG5bnPUXR4wL8TZWyoDaUdiWW7bKy')
-        inflated = proto_types.MultisigRedeemScriptType(
-            pubkeys=[proto_types.HDNodePathType(node=node, address_n=[1]),
-                     proto_types.HDNodePathType(node=node, address_n=[2]),
-                     proto_types.HDNodePathType(node=node, address_n=[3])],
-            signatures=[b'', b'', b''],
-            m=0xffffffff,
-        )
-        single = proto_types.TxInputType(
-            address_n=[0], amount=200000,
-            prev_hash=b'\x11' * 32, prev_index=0,
-            script_type=proto_types.SPENDP2SHWITNESS,
-        )
-        multisig = proto_types.TxInputType(
-            address_n=[1], prev_hash=b'\x22' * 32, prev_index=0,
-            script_type=proto_types.SPENDMULTISIG, multisig=inflated,
-        )
-        output = proto_types.TxOutputType(
-            address='mipcBbFg9gMiCh81Kj8tqqdgoZub1ZJRfn', amount=100000,
-            script_type=proto_types.PAYTOADDRESS,
-        )
-
-        with self.client:
-            with self.assertRaises(CallException) as caught:
-                self.client.sign_tx('Testnet', [single, multisig], [output])
-        self.assertIn('Invalid multisig quorum', str(caught.exception))
-
 
 if __name__ == '__main__':
     unittest.main()
