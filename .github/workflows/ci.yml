@@ -130,7 +130,7 @@ jobs:
           # integration-btc job) and the Ironwood known-answer vectors. So this
           # job validates 7.16.0; it does not validate the RC18 dependency
           # graph. Bump deliberately, and re-read that claim when you do.
-          ref: 6d5e1917b7cc80a5b84a6ec79c82cffef3aab4c9
+          ref: ec9ced7f23b119878961ee6571da29b035cf11fb
           path: keepkey-firmware
 
       # NOT `submodules: recursive`. trezor-firmware carries a micropython
