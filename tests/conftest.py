@@ -12,7 +12,12 @@ screenshot pipeline failures from going unnoticed.
 import pytest
 import os
 import glob
+import ipaddress
+import socket
 import sys
+from urllib.parse import urlparse
+
+import requests
 
 if os.environ.get('KEEPKEY_SCREENSHOT') == '1':
     import common
@@ -49,6 +54,73 @@ if os.environ.get('KEEPKEY_SCREENSHOT') == '1':
             self.client.screenshot_id = 0
 
     common.KeepKeyTest.setUp = _patched_setUp
+
+
+def _is_loopback_address(address):
+    """Allow emulator traffic while rejecting every external destination."""
+    if not isinstance(address, tuple):
+        # Unix-domain sockets are local by construction.
+        return True
+    host = address[0]
+    if isinstance(host, bytes):
+        host = host.decode('ascii')
+    if host == 'localhost':
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except (TypeError, ValueError):
+        return False
+
+
+@pytest.fixture(autouse=True)
+def deny_external_network(monkeypatch, request):
+    """Fail an authoritative test at its first non-loopback network access."""
+    nodeid = request.node.nodeid
+    original_getaddrinfo = socket.getaddrinfo
+    original_connect = socket.socket.connect
+    original_connect_ex = socket.socket.connect_ex
+    original_sendto = socket.socket.sendto
+    original_request = requests.sessions.Session.request
+
+    def denied(destination):
+        raise AssertionError(
+            'authoritative test attempted external network access: '
+            'test=%s destination=%r' % (nodeid, destination))
+
+    def guarded_getaddrinfo(host, *args, **kwargs):
+        if not _is_loopback_address((host, 0)):
+            denied(host)
+        return original_getaddrinfo(host, *args, **kwargs)
+
+    def guarded_connect(sock, address):
+        if not _is_loopback_address(address):
+            denied(address)
+        return original_connect(sock, address)
+
+    def guarded_connect_ex(sock, address):
+        if not _is_loopback_address(address):
+            denied(address)
+        return original_connect_ex(sock, address)
+
+    def guarded_sendto(sock, data, *args):
+        address = args[-1]
+        if not _is_loopback_address(address):
+            denied(address)
+        return original_sendto(sock, data, *args)
+
+    def guarded_request(session, method, url, *args, **kwargs):
+        hostname = urlparse(url).hostname
+        if not _is_loopback_address((hostname, 0)):
+            raise AssertionError(
+                'authoritative test attempted HTTP access: test=%s method=%s '
+                'url=%s' % (nodeid, method, url))
+        return original_request(session, method, url, *args, **kwargs)
+
+    monkeypatch.setattr(socket, 'getaddrinfo', guarded_getaddrinfo)
+    monkeypatch.setattr(socket.socket, 'connect', guarded_connect)
+    monkeypatch.setattr(socket.socket, 'connect_ex', guarded_connect_ex)
+    monkeypatch.setattr(socket.socket, 'sendto', guarded_sendto)
+    monkeypatch.setattr(requests.sessions.Session, 'request', guarded_request)
 
 
 def pytest_sessionfinish(session, exitstatus):
