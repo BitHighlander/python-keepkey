@@ -37,6 +37,11 @@ def bytes_to_int_le(b):
 class TestZcashOrchardFVK(common.KeepKeyTest):
     """Test Zcash Orchard Full Viewing Key derivation."""
 
+    def setUp(self):
+        super().setUp()
+        self.requires_firmware("7.14.0")
+        self.requires_message("ZcashGetOrchardFVK")
+
     def test_fvk_field_ranges(self):
         """FVK components must be in valid field ranges.
 

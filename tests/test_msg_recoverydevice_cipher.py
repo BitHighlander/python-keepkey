@@ -111,11 +111,18 @@ class TestDeviceRecovery(common.KeepKeyTest):
         ret = self.client.call_raw(proto.ButtonAck())
 
         mnemonic_words = mnemonic.split(' ')
+        captured_cipher = False
 
         for index, word in enumerate(mnemonic_words):
             for character in word:
                 self.assertIsInstance(ret, proto.CharacterRequest)
                 cipher = self.client.debug.read_recovery_cipher()
+                if not captured_cipher:
+                    # CharacterRequest is driven manually and never reaches
+                    # callback_ButtonRequest(); capture only after DebugLink
+                    # proves this is the active randomized cipher grid.
+                    self.client.capture_oled()
+                    captured_cipher = True
 
                 encoded_character = cipher[ord(character) - 97]
                 ret = self.client.call_raw(proto.CharacterAck(character=encoded_character))
@@ -166,6 +173,48 @@ class TestDeviceRecovery(common.KeepKeyTest):
         self.assertIsInstance(ret, proto.CharacterRequest)
         ret = self.client.call_raw(proto.CharacterAck(character='1'))
         self.assertIsInstance(ret, proto.Failure)
+
+    def test_invalid_bip39_word_rejected(self):
+        """Enter a non-BIP-39 word during cipher recovery and verify rejection.
+
+        With enforce_wordlist=True, completing a word that isn't in the
+        BIP-39 wordlist must return Failure immediately.
+        Requires firmware 7.15.1+ (per-word validation).
+        """
+        self.requires_firmware("7.15.1")
+        ret = self.client.call_raw(proto.RecoveryDevice(word_count=12,
+                                   passphrase_protection=False,
+                                   pin_protection=False,
+                                   label='label',
+                                   language='english',
+                                   enforce_wordlist=True,
+                                   use_character_cipher=True))
+
+        # Reminder UI
+        assert isinstance(ret, proto.ButtonRequest)
+        self.client.debug.press_yes()
+        ret = self.client.call_raw(proto.ButtonAck())
+
+        # Enter two 'z' characters via cipher — "zz" is not a BIP-39 word
+        for _ in range(2):
+            self.assertIsInstance(ret, proto.CharacterRequest)
+            cipher = self.client.debug.read_recovery_cipher()
+            encoded_z = cipher[ord('z') - 97]
+            ret = self.client.call_raw(proto.CharacterAck(character=encoded_z))
+
+        # Complete the word by pressing space
+        self.assertIsInstance(ret, proto.CharacterRequest)
+        ret = self.client.call_raw(proto.CharacterAck(character=' '))
+
+        # Firmware rejects immediately with Failure -- word not in BIP-39 wordlist
+        self.assertIsInstance(ret, proto.Failure)
+        self.assertIn("Word not found", ret.message)
+
+        # Capture the OLED rejection screen via DebugLink
+        # The firmware renders "Word not in wordlist" before sending Failure
+        import os as _os
+        if _os.environ.get('KEEPKEY_SCREENSHOT') == '1' and self.client.debug:
+            self.client._capture_oled()
 
     def test_backspace(self):
         mnemonic = self.mnemonic12

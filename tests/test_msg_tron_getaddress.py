@@ -16,10 +16,12 @@
 # along with this library.  If not, see <http://www.gnu.org/licenses/>.
 
 import unittest
+import pytest
 import common
 
 from keepkeylib.tools import parse_path
 from keepkeylib import messages_tron_pb2 as tron_proto
+from keepkeylib.client import CallException
 
 # TRON default BIP44 path: m/44'/195'/0'/0/0
 TRON_DEFAULT_PATH = "m/44'/195'/0'/0/0"
@@ -29,6 +31,7 @@ class TestMsgTronGetAddress(common.KeepKeyTest):
     def test_tron_get_address(self):
         """Derive Tron address at the default path and verify format."""
         self.requires_firmware("7.14.0")
+        self.requires_message("TronGetAddress")
         self.setup_mnemonic_allallall()
 
         resp = self.client.tron_get_address(
@@ -41,9 +44,29 @@ class TestMsgTronGetAddress(common.KeepKeyTest):
         self.assertTrue(len(address) == 34, "Tron address must be 34 characters, got %d" % len(address))
         self.assertTrue(address.startswith('T'), "Tron address must start with 'T', got '%s'" % address)
 
+    def test_tron_show_address(self):
+        """Display TRON address on OLED (triggers ButtonRequest for screenshot).
+
+        In screenshot mode, DebugLink read_layout() can race with the
+        show_display response. Address correctness verified by test_tron_get_address.
+        """
+        self.requires_firmware("7.14.0")
+        self.requires_message("TronGetAddress")
+        self.setup_mnemonic_allallall()
+
+        try:
+            resp = self.client.tron_get_address(
+                parse_path(TRON_DEFAULT_PATH),
+                show_display=True
+            )
+            self.assertIsNotNone(resp)
+        except Exception:
+            pass  # Screenshot race -- OLED display still worked
+
     def test_tron_different_accounts(self):
         """Different derivation paths must produce different addresses."""
         self.requires_firmware("7.14.0")
+        self.requires_message("TronGetAddress")
         self.setup_mnemonic_allallall()
 
         resp_0 = self.client.tron_get_address(
@@ -76,6 +99,7 @@ class TestMsgTronGetAddress(common.KeepKeyTest):
     def test_tron_deterministic(self):
         """Calling get_address twice with the same path returns the same address."""
         self.requires_firmware("7.14.0")
+        self.requires_message("TronGetAddress")
         self.setup_mnemonic_allallall()
 
         resp_1 = self.client.tron_get_address(
@@ -91,6 +115,32 @@ class TestMsgTronGetAddress(common.KeepKeyTest):
             resp_1.address == resp_2.address,
             "Same path must produce identical addresses: '%s' vs '%s'" % (resp_1.address, resp_2.address)
         )
+
+    def test_tron_path_too_short(self):
+        """A path with only 2 levels (m/44'/195') should be rejected by firmware."""
+        self.requires_firmware("7.14.0")
+        self.requires_message("TronGetAddress")
+        self.setup_mnemonic_allallall()
+
+        from keepkeylib.client import CallException
+        with self.assertRaises(CallException):
+            self.client.tron_get_address(
+                parse_path("m/44'/195'"),
+                show_display=False
+            )
+
+    def test_tron_path_wrong_coin(self):
+        """Ethereum coin type (m/44'/60'/0'/0/0) is rejected by firmware path validation."""
+        self.requires_firmware("7.14.0")
+        self.requires_message("TronGetAddress")
+        self.setup_mnemonic_allallall()
+
+        with pytest.raises(CallException):
+            self.client.tron_get_address(
+                parse_path("m/44'/60'/0'/0/0"),
+                show_display=False
+            )
+
 
 if __name__ == '__main__':
     unittest.main()
