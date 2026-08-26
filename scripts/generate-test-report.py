@@ -2935,7 +2935,7 @@ SECTIONS = [
        'f2cee375...912090f and messageHash c52c0ee5...4b371e, both published, both matched on '
        'hardware and in the emulator.',
        ['Domain name', 'Domain version', 'chainId', 'verifyingContract (42 chars, in full)',
-        'Cow / wallet', 'Bob / wallet', 'contents']),
+        'From name: Cow', 'From wallet', 'To name: Bob', 'To wallet', 'contents']),
       ('TD2', 'test_msg_eip712_streaming', 'test_array_of_structs_walks',
        'An array of structs walks and signs',
        'Arrays hash WITHOUT a typeHash prefix -- enc(array) is the keccak of the concatenated '

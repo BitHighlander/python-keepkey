@@ -118,6 +118,10 @@ class TestMsgEip712Streaming(common.KeepKeyTest):
         resp = self.client.call_raw(msg)
         for _ in range(max_steps):
             if isinstance(resp, proto.ButtonRequest):
+                # This is a manual, device-driven call_raw() loop, so no
+                # callback_ButtonRequest() will capture the field being
+                # approved. Retain it while that exact field is still active.
+                self.client.capture_oled()
                 self.client.debug.press_yes()
                 resp = self.client.call_raw(proto.ButtonAck())
             elif isinstance(resp, eth.EthereumTypedDataStructRequest):
@@ -140,6 +144,8 @@ class TestMsgEip712Streaming(common.KeepKeyTest):
         self.requires_structured_eip712()
         self.setup_mnemonic_nopin_nopassphrase()
         self.client.apply_policy('AdvancedMode', 1)
+        # The report entries describe typed-data fields, not the policy prompt.
+        self.client.reset_screenshots()
 
     def test_spec_example_matches_the_published_hashes(self):
         """The device's own hashes equal the EIP-712 reference implementation's.
