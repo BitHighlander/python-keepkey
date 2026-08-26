@@ -9,8 +9,13 @@ Usage:
   python3 scripts/generate-test-report.py --output=test-report.pdf
   python3 scripts/generate-test-report.py --fw-version=7.10.0 --junit=junit.xml --output=test-report.pdf
 """
-import struct, zlib, os, sys, argparse
-from datetime import datetime
+import argparse
+import json
+import os
+import struct
+import sys
+import zlib
+from datetime import datetime, timezone
 
 # ---------------------------------------------------------------
 # PDF writer + page builder (stdlib only)
@@ -187,46 +192,6 @@ def _w(text, n=95):
     if cur: lines.append(cur)
     return lines
 
-def _is_setup_frame(path):
-    """Check if a screenshot is a setUp noise frame (IMPORT RECOVERY, WIPE, or blank/logo)."""
-    try:
-        pixels, w, h = _read_png_pixels(path)
-        # Count non-zero pixels -- blank/logo frames have very few or very specific patterns
-        lit = sum(1 for b in pixels if b > 128)
-        total = w * h
-        # Very blank (< 5% lit) = idle/logo screen
-        if lit < total * 0.05:
-            return True
-        # Check for "IMPORT RECOVERY" text by looking at pixel density in top-left region
-        # setUp always shows this screen -- it's ~20% lit with specific pattern
-        # Real test screens vary widely, so we check the raw bytes for known patterns
-        # Simple heuristic: if first 2 btn frames match, skip them (setUp wipe + load)
-        return False
-    except:
-        return False
-
-def _pick_best_frame(test_dir, btn_files):
-    """Pick the best screenshot for a test, skipping setUp noise frames.
-    setUp always produces: btn00000 (wipe confirm) + btn00001 (load_device confirm).
-    Real test frames come after. If only setUp frames exist, return None."""
-    if not btn_files:
-        return None
-    # 3+ frames: [0]=setUp wipe, [1]=setUp load or instruction detail, [-1]=final confirm
-    # Prefer second-to-last frame -- it's the instruction-specific content
-    # (amounts, addresses, parameters). The last frame is usually a generic
-    # "Sign this transaction?" confirmation that's the same for every tx.
-    if len(btn_files) > 2:
-        # Use second-to-last for instruction detail, skip setUp frames
-        idx = -2 if len(btn_files) > 2 else -1
-        return os.path.join(test_dir, btn_files[idx])
-    elif len(btn_files) == 2:
-        # 2 frames: btn00000 is always setUp (wipe confirm), btn00001 is the test.
-        # Always show btn00001 -- it's the only real test frame.
-        return os.path.join(test_dir, btn_files[1])
-    else:
-        # Single frame -- almost always setUp noise (wipe confirm from setUp).
-        return None
-
 def detect_fw():
     try:
         from keepkeylib.transport_udp import UDPTransport
@@ -260,6 +225,10 @@ def parse_junit(path):
                     mod = p
                     break
             results[f'{cls}.{name}'] = status
+            # Native gtest suites use a short classname such as Board or
+            # Solana. Keep that exact key so release controls can appear in
+            # the same evidence index as Python integration tests.
+            results[f'{cls}::{name}'] = status
         # Key by module::method (disambiguates collisions like test_sign_btc_eth_swap)
         if mod:
             results[f'{mod}::{name}'] = status
@@ -268,6 +237,146 @@ def parse_junit(path):
             results[name] = status
     return results
 
+
+def junit_summary(path):
+    """Return authoritative counts from every testcase in one merged JUnit."""
+    if not path or not os.path.exists(path):
+        return {'total': 0, 'passed': 0, 'failed': 0, 'errors': 0, 'skipped': 0}
+    import xml.etree.ElementTree as ET
+    counts = {'total': 0, 'passed': 0, 'failed': 0, 'errors': 0, 'skipped': 0}
+    for tc in ET.parse(path).iter('testcase'):
+        counts['total'] += 1
+        if tc.find('failure') is not None:
+            counts['failed'] += 1
+        elif tc.find('error') is not None:
+            counts['errors'] += 1
+        elif tc.find('skipped') is not None:
+            counts['skipped'] += 1
+        else:
+            counts['passed'] += 1
+    return counts
+
+
+def junit_reconciliation(path):
+    """Return testcase-derived counts for each authoritative input source."""
+    import xml.etree.ElementTree as ET
+    root = ET.parse(path).getroot()
+    suites = [root] if root.tag == 'testsuite' else root.findall('testsuite')
+    by_source = {}
+    for suite in suites:
+        source = suite.get('evidence_source') or suite.get('name') or 'unknown'
+        counts = by_source.setdefault(
+            source,
+            {'total': 0, 'passed': 0, 'failed': 0, 'errors': 0, 'skipped': 0},
+        )
+        for tc in suite.iter('testcase'):
+            counts['total'] += 1
+            if tc.find('failure') is not None:
+                counts['failed'] += 1
+            elif tc.find('error') is not None:
+                counts['errors'] += 1
+            elif tc.find('skipped') is not None:
+                counts['skipped'] += 1
+            else:
+                counts['passed'] += 1
+    return by_source
+
+
+VERIFIED_SOLANA_FIELD_PAIRS = (
+    'system-transfer-source', 'create-account-funder',
+    'advance-nonce-account', 'withdraw-nonce-account',
+    'initialize-nonce-account', 'initialize-nonce-authority',
+    'authorize-nonce-account', 'assign-account', 'allocate-account',
+    'token-checked-source', 'token-revoke-account', 'token-mint-to-mint',
+    'token-mint-to-destination', 'token-burn-mint', 'token-burn-source',
+    'token-freeze-account', 'token-freeze-mint', 'token-thaw-account',
+    'token-thaw-mint', 'token-sync-native-account',
+    'stake-delegate-account', 'stake-delegate-vote',
+    'stake-withdraw-account', 'stake-authorize-account',
+    'stake-authorize-role', 'stake-split-account',
+    'stake-deactivate-account', 'stake-merge-source',
+    'stake-merge-destination', 'vote-authorize-account',
+    'vote-authorize-role', 'vote-withdraw-account',
+    'vote-validator-account', 'vote-commission-account',
+    'ata-account', 'ata-owner', 'ata-mint',
+)
+VERIFIED_SOLANA_FIELD_GROUPS = tuple(
+    pair + suffix
+    for pair in VERIFIED_SOLANA_FIELD_PAIRS
+    for suffix in ('-a', '-b')
+)
+
+# Differential tests make two requests in one test method. Their images must
+# remain separated and labelled or an artifact can retain one side of an A/B
+# assertion while hiding the other. Every named group is required by the OLED
+# audit and every captured frame in it is rendered into the PDF.
+SCREENSHOT_GROUPS = {
+    ('test_msg_solana_display_disclosure',
+     'test_raw_message_tail_changes_oled_review'): ('payload-a', 'payload-b'),
+    ('test_msg_solana_display_disclosure',
+     'test_offchain_message_tail_changes_oled_review'): ('payload-a', 'payload-b'),
+    ('test_msg_solana_display_disclosure',
+     'test_offchain_format_changes_oled_review'): ('format-ascii', 'format-utf8'),
+    ('test_msg_solana_display_disclosure',
+     'test_memo_tail_changes_oled_review'): ('payload-a', 'payload-b'),
+    ('test_msg_ton_display_disclosure',
+     'test_raw_message_tail_changes_oled_review'): ('payload-a', 'payload-b'),
+    ('test_msg_solana_instruction_disclosure',
+     'test_close_account_destination_changes_oled_review'):
+        ('destination-a', 'destination-b'),
+    ('test_msg_solana_instruction_disclosure',
+     'test_priority_fee_payer_changes_oled_review'): ('payer-a', 'payer-b'),
+    ('test_msg_solana_instruction_disclosure',
+     'test_vote_validator_uses_account_not_trailing_data'):
+        ('validator-a', 'validator-b'),
+    ('test_msg_solana_instruction_disclosure',
+     'test_all_verified_instruction_fields_change_oled_review'):
+        VERIFIED_SOLANA_FIELD_GROUPS,
+}
+
+# This release manifest is an additional security floor independent of the
+# report section layout. Diff-derived changed-tests.json is the completeness
+# source; these manually pinned controls ensure the highest-risk invariants
+# remain mandatory even when a later edit does not touch their source files.
+RELEASE_REQUIRED_TESTS = {
+    '7.14.2': (
+        ('test_msg_solana_display_disclosure',
+         'test_raw_message_tail_changes_oled_review'),
+        ('test_msg_solana_display_disclosure',
+         'test_offchain_message_tail_changes_oled_review'),
+        ('test_msg_solana_display_disclosure',
+         'test_offchain_format_changes_oled_review'),
+        ('test_msg_solana_display_disclosure',
+         'test_memo_tail_changes_oled_review'),
+        ('test_msg_solana_instruction_disclosure',
+         'test_set_authority_roles_require_opaque_mode'),
+        ('test_msg_solana_instruction_disclosure',
+         'test_token_2022_transfer_checked_with_hook_accounts_is_opaque'),
+        ('test_msg_solana_instruction_disclosure',
+         'test_close_account_destination_changes_oled_review'),
+        ('test_msg_solana_instruction_disclosure',
+         'test_priority_fee_payer_changes_oled_review'),
+        ('test_msg_solana_instruction_disclosure',
+         'test_invalid_priority_fee_is_rejected_before_confirmation'),
+        ('test_msg_solana_instruction_disclosure',
+         'test_vote_validator_uses_account_not_trailing_data'),
+        ('test_msg_solana_instruction_disclosure',
+         'test_all_verified_instruction_fields_change_oled_review'),
+        ('test_msg_solana_instruction_disclosure',
+         'test_token_2022_associated_account_is_opaque'),
+        ('test_msg_solana_signtx', 'test_solana_sign_token_transfer'),
+        ('test_msg_solana_signtx', 'test_solana_sign_token_approve'),
+        ('test_msg_ton_display_disclosure',
+         'test_raw_message_tail_changes_oled_review'),
+        ('test_protection_levels', 'test_sign_message'),
+        ('test_msg_ping', 'test_authenticator_passphrase_cancel_is_terminal'),
+        ('Board', 'PostPreviewMutationChangesExactByteReview'),
+        ('Solana', 'MemoRetainsEverySignedByteForReview'),
+        ('Solana', 'PriorityFeeCalculationIsRoundedAndOverflowSafe'),
+        ('Solana', 'RecognizedInstructionMissingAccountsIsOpaque'),
+    ),
+}
+
 # ---------------------------------------------------------------
 # Test catalog with full context per test
 # ---------------------------------------------------------------
@@ -275,7 +384,7 @@ def parse_junit(path):
 # context = why this test exists, what it proves, what user sees
 
 SECTIONS = [
-    ('S', 'Display Binding - What the Device Signs Is What It Shows', '7.14.2',
+    ('DB', 'Display Binding - What the Device Signs Is What It Shows', '7.14.2',
      'The 7.14.2 security release changed what reaches the OLED on the signing paths. Every '
      'defect it fixed was a case of the device hashing bytes it never rendered, or rendering '
      'text it could not vouch for. These tests exist to capture those screens: a passing wire '
@@ -296,7 +405,7 @@ SECTIONS = [
          'and their evidence is the Failure on the wire plus the absence of a ButtonRequest.',
      ],
      [
-         ('S1', 'test_msg_ethereum_erc20_0x_signtx', 'test__sign_transformERC20',
+         ('DB1', 'test_msg_ethereum_erc20_0x_signtx', 'test__sign_transformERC20',
           '0x transformERC20 raw disclosure',
           'A 1480-byte transformERC20 payload exceeds one 1024-byte chunk. The device must NOT '
           'clear-sign it as a token swap, because the bytes past the initial chunk are hashed '
@@ -304,45 +413,37 @@ SECTIONS = [
           'count shown must be the FULL length (1480), not the chunk length (1024) - a short '
           'count would under-report what is being signed.',
           ['Raw contract data screen showing the full byte count']),
-         ('S2', 'test_msg_ethereum_erc20_0x_signtx', 'test_sign_0x_swap_ERC20_to_ETH',
+         ('DB2', 'test_msg_ethereum_erc20_0x_signtx', 'test_sign_0x_swap_ERC20_to_ETH',
           '0x sellToUniswap names both assets',
           'Clear-signing is only honest when BOTH token words resolve to known assets. This '
           'payload resolves (USDC -> ETH) and must name both sides with real amounts. The '
           'failure this guards is a screen naming a DEX while showing no amount.',
           ['Swap screen naming both assets and amounts']),
-         ('S3', 'test_msg_ethereum_erc20_0x_signtx', 'test_sign_longdata_swap',
+         ('DB3', 'test_msg_ethereum_erc20_0x_signtx', 'test_sign_longdata_swap',
           'Long 0x calldata stays disclosed',
           'Calldata spanning multiple chunks must not silently lose its tail from the display '
           'while remaining inside the signature.',
           ['Contract data screen']),
-         ('S8', 'test_msg_ethereum_signing_guards',
-          'test_contract_handler_streamed_calldata_signs_full_data',
-          'Streamed calldata is fully covered',
-          'Calldata delivered across several chunks must be hashed in full and disclosed in full. '
-          'This is the positive control for the chunk-completeness gate. NOTE: every test in '
-          'test_msg_ethereum_signing_guards currently SKIPS in CI under requires_firmware, so no '
-          'screen can be captured for it yet - the screenshot list stays empty until the gate '
-          'opens, rather than declaring an expectation nothing can satisfy.',
-          []),
-         ('S9', 'test_msg_ethereum_signing_guards', 'test_eip1559_requires_chain_id',
+         ('DB4', 'test_msg_ethereum_signtx',
+          'test_ethereum_signtx_omitted_chain_id_rejected',
           'Omitted chain_id is refused before any screen',
           'Without a chain_id the device cannot name the network, and a signature would be '
           'pre-EIP-155 - replayable on every EVM chain. The refusal happens before the first '
           'confirm(), so NO screen is drawn and no ButtonRequest is emitted. The empty '
           'screenshot list below is the assertion.',
           []),
-         ('S10', 'test_verify_typed_data', 'test_structured_eip712_is_refused',
+         ('DB5', 'test_verify_typed_data', 'test_structured_eip712_is_refused',
           'Structured EIP-712 is closed by default',
           'The legacy JSON parser could not guarantee that every displayed value was the '
           'canonical value being hashed, and one screen took its title from the attacker-supplied '
           'domain name. The feature is withdrawn rather than shipped with a screen it could not '
           'vouch for: zero screens, refusal on the wire.',
           []),
-         ('S11', 'test_msg_binance_sign_tx', 'test_transfer',
+         ('DB6', 'test_msg_binance_sign_tx', 'test_transfer',
           'Binance denom renders in full',
           'A long denom must render completely and must not overflow the formatting buffer.',
           ['Transfer screen showing the full denom']),
-         ('S12', 'test_msg_ping', 'test_ping_long_body_is_paged',
+         ('DB7', 'test_msg_ping', 'test_ping_long_body_is_paged',
           'A long body is paged, not clipped',
           'A body that will not fit one screen is shown across several, with the page number '
           'in the title. Before 7.14.2 the device drew what fitted and stopped - no ellipsis, '
@@ -351,7 +452,7 @@ SECTIONS = [
           'remainder is now actually reachable. The press DURATIONS (click to page, hold to '
           'approve) are not assertable in an emulator with no physical button.',
           ['Numbered page screens covering the whole body']),
-         ('S13', 'test_msg_ping', 'test_ping_short_body_is_not_paged',
+         ('DB8', 'test_msg_ping', 'test_ping_short_body_is_not_paged',
           'A body that fits is not paged',
           'The control for S12. A fitting body must still take exactly one screen with an '
           'unnumbered title - otherwise a pager that numbered every confirmation, making '
@@ -904,52 +1005,163 @@ SECTIONS = [
           []),
      ]),
 
-    ('S', 'Solana', '7.14.0',
-     'NEW: Full Solana with Ed25519 (SLIP-10), base58 addresses, 37 instruction types across 7 '
-     'programs. Key security fix: full 44-character address display replaces old 8-char truncation '
-     'that was a spoofing vector.',
+    ('SOL', 'Solana', '7.14.0',
+     'NEW: Solana with Ed25519 (SLIP-10), base58 addresses, strict canonical decoding for selected '
+     'instructions, and an AdvancedMode opaque path for semantics the firmware cannot fully '
+     'authenticate. Full 44-character address display replaces old 8-char truncation.',
      [
          'ADDRESS: m/44\'/501\'/0\' Ed25519 -> full 44-char base58 on OLED',
          'SIGN TX: Parse instructions -> per-instruction confirmation -> Ed25519 sign',
-         'SIGN MESSAGE: Arbitrary bytes -> hex display -> Ed25519 sign',
+         'RAW MESSAGE: AdvancedMode -> explicit raw/no-version/no-domain screen -> exact-byte pages',
+         'OFF-CHAIN: validate version + format -> bind both on screen -> exact-byte pages -> sign envelope',
+         'MEMO: every memo byte is paged exactly; empty memos are explicitly labelled (empty)',
      ],
      [
-         ('S1', 'test_msg_solana_getaddress', 'test_solana_get_address',
+         ('SOL1', 'test_msg_solana_getaddress', 'test_solana_get_address',
           'Derive Solana address', 'Full 44-character base58 address displayed on OLED.', ['Full 44-char address']),
-         ('S2', 'test_msg_solana_getaddress', 'test_solana_different_accounts',
+         ('SOL2', 'test_msg_solana_getaddress', 'test_solana_different_accounts',
           'Different account indices', 'Verifies different accounts produce different addresses.', []),
-         ('S3', 'test_msg_solana_getaddress', 'test_solana_deterministic',
+         ('SOL3', 'test_msg_solana_getaddress', 'test_solana_deterministic',
           'Deterministic derivation', 'Same path always produces same address.', []),
-         ('S3b', 'test_msg_solana_getaddress', 'test_solana_show_address',
+         ('SOL4', 'test_msg_solana_getaddress', 'test_solana_show_address',
           'Show address on OLED', 'Full 44-char base58 address with QR code on OLED display.', ['Solana QR + 44-char address']),
-         ('S4', 'test_msg_solana_signtx', 'test_solana_sign_system_transfer',
+         ('SOL5', 'test_msg_solana_signtx', 'test_solana_sign_system_transfer',
           'Sign SOL transfer', 'System::Transfer with full address + amount display.', ['SOL amount + address']),
-         ('S5', 'test_msg_solana_signtx', 'test_solana_sign_message',
+         ('SOL6', 'test_msg_solana_signtx', 'test_solana_sign_message',
           'Sign Solana message', 'Arbitrary message signing with Ed25519 key. Requires AdvancedMode policy (no domain separation).', ['Message screen']),
-         ('S6', 'test_msg_solana_signtx', 'test_solana_sign_empty_rejected',
+         ('SOL7', 'test_msg_solana_signtx', 'test_solana_sign_empty_rejected',
           'Empty tx rejected', 'Zero-length transaction data is refused.', []),
-         ('S7', 'test_msg_solana_signtx', 'test_solana_sign_deterministic',
+         ('SOL8', 'test_msg_solana_signtx', 'test_solana_sign_deterministic',
           'Deterministic signing', 'Same tx always produces same signature.', []),
-         ('S8', 'test_msg_solana_signtx', 'test_solana_sign_token_transfer',
-          'SPL Token transfer',
-          'Send SPL tokens to destination. OLED shows token amount and recipient address.',
-          ['Token amount + address']),
-         ('S9', 'test_msg_solana_signtx', 'test_solana_sign_stake_delegate',
+         ('SOL9', 'test_msg_solana_signtx', 'test_solana_sign_token_transfer',
+          'Unchecked SPL Token transfer is opaque',
+          'The unchecked encoding carries no mint or decimals. Without AdvancedMode it is refused; '
+          'it is never presented as a verified transfer.', []),
+         ('SOL10', 'test_msg_solana_signtx', 'test_solana_sign_stake_delegate',
           'Stake delegate',
           'Delegate SOL to a validator for staking rewards. OLED shows delegate confirmation.',
           ['Delegate stake confirm']),
-         ('S10', 'test_msg_solana_signtx', 'test_solana_sign_memo',
+         ('SOL11', 'test_msg_solana_signtx', 'test_solana_sign_memo',
           'Memo instruction',
           'Attach memo text to transaction. OLED shows memo content.',
           ['Memo text']),
-         ('S11', 'test_msg_solana_signtx', 'test_solana_sign_compute_budget_unit_price',
+         ('SOL12', 'test_msg_solana_signtx', 'test_solana_sign_compute_budget_unit_price',
           'Compute budget unit price',
-          'Set priority fee for transaction. OLED shows compute unit price.',
-          ['Unit price']),
-         ('S12', 'test_msg_solana_signtx', 'test_solana_sign_token_transfer_with_metadata',
+          'Set a priority fee. OLED shows the raw compute budget, exact fee payer, and maximum '
+          'priority-fee liability in SOL.',
+          ['Raw compute budget, fee payer, and maximum priority fee']),
+         ('SOL13', 'test_msg_solana_signtx', 'test_solana_sign_token_transfer_with_metadata',
           'SPL Token with metadata',
           'Token transfer with SolanaTokenInfo (mint, symbol, decimals). OLED shows human-readable token name.',
           ['Token name + amount']),
+         ('SOL14', 'test_msg_solana_display_disclosure',
+          'test_raw_message_tail_changes_oled_review',
+          'Raw-message tail A/B remains distinguishable',
+          'Two equal-length payloads with the same first 32 bytes and a mutation after the old preview '
+          'boundary must produce different complete OLED reviews. Both labelled A/B sequences are retained.',
+          ['payload-a complete sequence', 'payload-b complete sequence']),
+         ('SOL15', 'test_msg_solana_display_disclosure',
+          'test_offchain_message_tail_changes_oled_review',
+          'Off-chain tail A/B remains distinguishable',
+          'The device signs the complete off-chain envelope, so the review must disclose every payload byte, '
+          'not merely a prefix and length. Both labelled A/B sequences are retained.',
+          ['payload-a complete sequence', 'payload-b complete sequence']),
+         ('SOL16', 'test_msg_solana_display_disclosure',
+          'test_offchain_format_changes_oled_review',
+          'Off-chain signed format is bound to review',
+          'Identical message bytes under ASCII and UTF-8 formats produce different signed envelopes. The '
+          'format screen and payload pages for both labelled variants are retained.',
+          ['format-ascii complete sequence', 'format-utf8 complete sequence']),
+         ('SOL17', 'test_msg_solana_display_disclosure',
+          'test_memo_tail_changes_oled_review',
+          'Memo tail A/B remains distinguishable',
+          'Memo data is part of the signed transaction. A byte beyond the old short preview must alter the '
+          'review, and both labelled A/B sequences are retained.',
+          ['payload-a complete sequence', 'payload-b complete sequence']),
+         ('SOL18', 'test_msg_solana_instruction_disclosure',
+          'test_set_authority_roles_require_opaque_mode',
+          'SetAuthority roles require opaque mode',
+          'Mint, freeze, owner and close authority changes—including permanent None revocation—are '
+          'never clear-signed by the 7.14.2 decoder.', []),
+         ('SOL19', 'test_msg_solana_instruction_disclosure',
+          'test_token_2022_transfer_checked_with_hook_accounts_is_opaque',
+          'Token-2022 with hook accounts is opaque',
+          'Token-2022 fees, extensions and hook accounts are not authenticated by the legacy SPL '
+          'decoder, so the operation is refused without AdvancedMode.', []),
+         ('SOL20', 'test_msg_solana_instruction_disclosure',
+          'test_close_account_destination_changes_oled_review',
+          'CloseAccount source and balance destination A/B',
+          'Changing the account whose lamports are swept or the recipient must change the complete '
+          'OLED review. Both destination variants are retained.',
+          ['destination-a complete sequence', 'destination-b complete sequence']),
+         ('SOL21', 'test_msg_solana_instruction_disclosure',
+          'test_priority_fee_payer_changes_oled_review',
+          'Priority fee payer and maximum SOL liability A/B',
+          'The exact fee payer and overflow-safe maximum priority fee in SOL are reviewed after the '
+          'raw compute-budget instructions. Both payer variants are retained.',
+          ['payer-a complete sequence', 'payer-b complete sequence']),
+         ('SOL22', 'test_msg_solana_instruction_disclosure',
+          'test_vote_validator_uses_account_not_trailing_data',
+          'Vote validator identity comes from the signed account list',
+          'The canonical instruction displays account index 1; a forged trailing-data encoding is '
+         'opaque. Both validator-account variants are retained.',
+          ['validator-a complete sequence', 'validator-b complete sequence']),
+         ('SOL23', 'test_msg_solana_signtx', 'test_solana_sign_token_approve',
+          'Unchecked SPL Token approve is opaque',
+          'The unchecked encoding carries no mint, so the device cannot identify the asset delegated. '
+          'It is refused without AdvancedMode.', []),
+         ('SOL24', 'test_msg_solana_instruction_disclosure',
+          'test_all_verified_instruction_fields_change_oled_review',
+          'Every clear-sign instruction field has an OLED A/B control',
+          'Thirty-seven independent pairs mutate exactly one acted-on account, mint, authority role, '
+          'or target. All 74 labelled sequences are retained in full.',
+          ['37 A sequences and 37 B sequences, complete and labelled']),
+         ('SOL25', 'test_msg_solana_instruction_disclosure',
+          'test_token_2022_associated_account_is_opaque',
+          'Token-2022 associated-account creation is opaque',
+          'The ATA program account list selects the legacy or Token-2022 token program. Only the '
+         'canonical legacy pair is clear-signed; Token-2022 is refused without AdvancedMode.', []),
+         ('SOL26', 'test_msg_solana_instruction_disclosure',
+          'test_invalid_priority_fee_is_rejected_before_confirmation',
+          'Invalid priority fees fail before consent',
+          'Duplicate or unrepresentable compute-budget fields are rejected before the first '
+          'ButtonRequest. A later parser failure cannot retract an earlier physical approval.', []),
+     ]),
+
+    ('RP', '7.14.2 Release Protocol Regressions', '7.14.2',
+     'These controls cover protocol ordering and exact-byte invariants changed during the final '
+     '7.14.2 pre-signing fixes. They are called out separately so a green aggregate cannot hide '
+     'the release-specific checks a reviewer is expected to find.',
+     [
+         'AUTHENTICATION: version-gated expectations preserve old firmware while enforcing 7.14.2 order.',
+         'CANCEL: cancellation is terminal; no stale success may leak into the next request.',
+         'EXACT BYTES: native controls mutate data after the old preview and retain memo tails.',
+     ],
+     [
+         ('RP1', 'test_protection_levels', 'test_sign_message',
+          'Message signing authenticates before approval on 7.14.2',
+          'Semantic firmware gating selects the 7.14.2 PIN/passphrase-first protocol without breaking '
+          'the established order on older firmware.', []),
+         ('RP2', 'test_msg_ping', 'test_authenticator_passphrase_cancel_is_terminal',
+          'Authenticator cancellation is terminal',
+          'After PIN and passphrase prompts, Cancel must return Failure and Initialize must receive its own '
+          'Features response rather than a queued stale account Success.', []),
+         ('RP3', 'Board', 'PostPreviewMutationChangesExactByteReview',
+          'Native exact-byte pager detects a tail mutation',
+          'The board-level control proves a mutation after the preview boundary changes the bytes reachable '
+          'during review.', []),
+         ('RP4', 'Solana', 'MemoRetainsEverySignedByteForReview',
+          'Native Solana memo parser retains the full signed memo',
+          'The native parser/confirmation control proves the memo tail remains available for exact-byte '
+          'review throughout signing.', []),
+         ('RP5', 'Solana', 'PriorityFeeCalculationIsRoundedAndOverflowSafe',
+          'Priority-fee calculation covers defaults, rounding and overflow',
+          'The native calculation uses the 1.4M-CU maximum when no limit is supplied, rounds up '
+          'micro-lamports, and refuses duplicate or unrepresentable fees.', []),
+         ('RP6', 'Solana', 'RecognizedInstructionMissingAccountsIsOpaque',
+          'Recognized instructions require their complete account layout',
+          'A known instruction with too few account indices cannot enter verified review with '
+          'zero-filled security fields; it is routed to opaque signing.', []),
      ]),
 
     ('T', 'TRON', '7.14.0',
@@ -975,13 +1187,13 @@ SECTIONS = [
      ]),
 
     ('N', 'TON', '7.14.0',
-     'NEW: TON v4r2 wallet contracts. Ed25519 signing with structured field display. '
-     'Blind-sign for raw transactions. Memo/comment support. '
-     'Full clear-sign with cell tree reconstruction deferred to 7.15+.',
+     'TON transactions remain opaque and require AdvancedMode. Raw message signing is also '
+     'bare Ed25519 with no domain separation; 7.14.2 binds that scheme on screen and pages '
+     'every signed byte exactly.',
      [
          'ADDRESS: m/44\'/607\'/0\' -> full 48-char base64url TON address',
-         'STRUCTURED: Amount + address + memo shown as display context -> sign',
-         'BLIND-SIGN: Raw tx without structured fields -> "BLIND SIGNATURE" warning',
+         'TRANSACTION: AdvancedMode -> explicit byte-count blind-sign warning',
+         'RAW MESSAGE: AdvancedMode -> raw/no-version/no-domain screen -> exact-byte pages',
      ],
      [
          ('N1', 'test_msg_ton_getaddress', 'test_ton_get_address',
@@ -1000,6 +1212,12 @@ SECTIONS = [
           'Sign TON blind', 'Raw tx without structured fields triggers blind sign.', ['Blind warning']),
          ('N7', 'test_msg_ton_signtx', 'test_ton_sign_missing_fields_rejected',
           'Missing fields rejected', 'Incomplete data refused.', []),
+         ('N8', 'test_msg_ton_display_disclosure',
+          'test_raw_message_tail_changes_oled_review',
+          'TON raw-message tail A/B remains distinguishable',
+          'Two equal-length raw Ed25519 payloads sharing the old 32-byte preview must produce '
+          'different complete OLED reviews. Both labelled A/B sequences are retained.',
+          ['payload-a complete sequence', 'payload-b complete sequence']),
      ]),
 
     ('Z', 'Zcash Orchard', '7.14.0',
@@ -1032,7 +1250,7 @@ SECTIONS = [
           'Multi-input shielding', 'Multiple transparent inputs shielded in one tx.', []),
      ]),
 
-    ('D', 'BIP-85 Child Derivation', '7.14.0',
+    ('B85', 'BIP-85 Child Derivation', '7.14.0',
      'NEW: Derives child BIP-39 mnemonic from master seed via HMAC-SHA512 (BIP-85). Display-only: '
      'derived words appear on OLED, never transmitted over USB. Seed accessed in CONFIDENTIAL '
      'buffer, memzero\'d after use.',
@@ -1041,22 +1259,22 @@ SECTIONS = [
          'DISPLAY: Words shown on OLED only -> user writes down -> never sent to host',
      ],
      [
-         ('D1', 'test_msg_bip85', 'test_bip85_12word_flow',
+         ('B85-1', 'test_msg_bip85', 'test_bip85_12word_flow',
           'Derive 12-word child',
           'Derives 128 bits of child entropy -> 12-word BIP-39 mnemonic displayed on OLED.',
           ['Derivation params', 'Mnemonic on OLED']),
-         ('D2', 'test_msg_bip85', 'test_bip85_24word_flow',
+         ('B85-2', 'test_msg_bip85', 'test_bip85_24word_flow',
           'Derive 24-word child', '256 bits -> 24 words.', []),
-         ('D3', 'test_msg_bip85', 'test_bip85_18word_flow',
+         ('B85-3', 'test_msg_bip85', 'test_bip85_18word_flow',
           'Derive 18-word child', '192 bits -> 18 words.', []),
-         ('D4', 'test_msg_bip85', 'test_bip85_different_indices_different_flows',
+         ('B85-4', 'test_msg_bip85', 'test_bip85_different_indices_different_flows',
           'Different indices', 'Index 0 and index 1 must produce completely different mnemonics.', []),
-         ('D5', 'test_msg_bip85', 'test_bip85_deterministic_flow',
+         ('B85-5', 'test_msg_bip85', 'test_bip85_deterministic_flow',
           'Deterministic', 'Same seed + same index always produces same child mnemonic.', []),
-         ('D6', 'test_msg_bip85', 'test_bip85_invalid_word_count',
+         ('B85-6', 'test_msg_bip85', 'test_bip85_invalid_word_count',
           'Invalid count rejected', 'Word counts other than 12/18/24 are refused.', []),
      ]),
-    ('D', 'Display Disclosure - What Is Shown Is What Is Signed', '7.14.2',
+    ('DD', 'Display Disclosure - What Is Shown Is What Is Signed', '7.14.2',
      'The single property behind every display/sign divergence found in the 7.14.2 audit: two '
      'requests whose SIGNED BYTES differ must not produce IDENTICAL screens. If two payloads render '
      'the same pixels, whatever separates them was invisible when the user approved, and the '
@@ -1077,32 +1295,32 @@ SECTIONS = [
          'the property; the failure under test is signing it while looking identical to the benign case.',
      ],
      [
-         ('D1', 'test_msg_display_disclosure', 'test_bytes_past_an_embedded_nul_are_disclosed',
+         ('DD1', 'test_msg_display_disclosure', 'test_bytes_past_an_embedded_nul_are_disclosed',
           'Bytes after a NUL are shown',
           'A protobuf bytes field is not a NUL-terminated string. Rendering it with "%s" stops at the '
           'first NUL while the signature covers message.size bytes, so a payload like '
           '"benign login\\0 AND APPROVE TRANSFER" displays only the benign prefix. This asserts the '
           'two payloads do not present identically.',
           ['Message screen, plain', 'Message screen, NUL-suffixed']),
-         ('D2', 'test_msg_display_disclosure', 'test_bytes_past_whitespace_padding_are_disclosed',
+         ('DD2', 'test_msg_display_disclosure', 'test_bytes_past_whitespace_padding_are_disclosed',
           'Whitespace cannot hide signed text',
           'Whitespace is the cheapest way to push content out of view: a leading space costs zero '
           'pixels once a line has wrapped, so padding can make an over-long body measure as fitting '
           'while the tail is neither shown nor dropped from the signature.',
           ['Message screen, short', 'Message screen, padded']),
-         ('D3', 'test_msg_display_disclosure', 'test_bytes_past_the_first_screen_are_disclosed',
+         ('DD3', 'test_msg_display_disclosure', 'test_bytes_past_the_first_screen_are_disclosed',
           'Content beyond one screen is not silently dropped',
           'Whether the device pages the remainder, states how much is hidden, or refuses is not '
           'asserted - only that a long payload with a distinct tail does not look identical to a '
           'short one.',
           ['Message screen, fits', 'Message screen, overlong']),
-         ('D4', 'test_msg_display_disclosure', 'test_newline_padding_does_not_collapse_the_screen',
+         ('DD4', 'test_msg_display_disclosure', 'test_newline_padding_does_not_collapse_the_screen',
           'Line counting cannot be overflowed',
           'Line counting is a security boundary once it gates a truncation warning. A body carrying '
           'many newlines exercises the row counter rather than the character count; if that counter '
           'wraps, an arbitrarily long body reports as fitting.',
           ['Message screen, one line', 'Message screen, newline-padded']),
-         ('D5', 'test_msg_display_disclosure', 'test_signing_shows_at_least_one_screen',
+         ('DD5', 'test_msg_display_disclosure', 'test_signing_shows_at_least_one_screen',
           'Guard: the comparisons are not vacuous',
           'Every other test in this section compares screen sequences. A flow that produced no '
           'ButtonRequest would make two payloads compare equal as empty tuples and pass while showing '
@@ -1114,10 +1332,29 @@ SECTIONS = [
 # ---------------------------------------------------------------
 # Render
 # ---------------------------------------------------------------
-def render(output_path, fw_version, results, screenshot_dir=None):
+def render(output_path, fw_version, results, screenshot_dir=None,
+           summary=None, provenance=None, suite_counts=None,
+           generated_at=None, derived_sources=None):
     pdf = PDF(); pb = PB(pdf)
-    ts = datetime.now().strftime('%Y-%m-%d %H:%M')
+    generated_at = generated_at or datetime.now(timezone.utc).strftime(
+        '%Y-%m-%dT%H:%M:%SZ'
+    )
+    summary = summary or {
+        'total': 0, 'passed': 0, 'failed': 0, 'errors': 0, 'skipped': 0
+    }
+    provenance = provenance or {}
+    suite_counts = suite_counts or {}
     active = [(l,t,mf,bg,fl,tests) for l,t,mf,bg,fl,tests in SECTIONS if ver_ge(fw_version, mf)]
+    derived = derived_catalog_tests(fw_version, derived_sources or {})
+    if derived:
+        active.append((
+            'CHG', 'Diff-derived release tests', fw_version,
+            'This section is generated from the exact last-shipped-tag to '
+            'candidate-head test diff. It cannot be shortened by editing the '
+            'hand-maintained report catalog.',
+            ['Every listed test must be present in authoritative JUnit and pass.'],
+            derived,
+        ))
     # Separate specs section (no tests) from test sections
     specs = [s for s in active if not s[5]]
     # Sections with results first, pending sections at bottom.
@@ -1125,22 +1362,43 @@ def render(output_path, fw_version, results, screenshot_dir=None):
     has_results = [s for s in active if s[5] and any(_lookup(results, t[1], t[2]) for t in s[5])]
     no_results = [s for s in active if s[5] and not any(_lookup(results, t[1], t[2]) for t in s[5])]
     test_sections = has_results + no_results
-    total = sum(len(s[5]) for s in test_sections)
-    passed = sum(1 for s in test_sections for t in s[5] if _lookup(results, t[1], t[2]) == 'pass')
-    failed = sum(1 for s in test_sections for t in s[5] if _lookup(results, t[1], t[2]) in ('fail','error'))
-    skipped = total - passed - failed
+    catalog_total = sum(len(s[5]) for s in test_sections)
+    catalog_passed = sum(1 for s in test_sections for t in s[5]
+                         if _lookup(results, t[1], t[2]) == 'pass')
+    catalog_failed = sum(1 for s in test_sections for t in s[5]
+                         if _lookup(results, t[1], t[2]) in ('fail','error'))
 
     # Title
     pb.text(20, 'KeepKey Firmware Test Report', bold=True)
     pb.gap(2)
-    if passed == total and total > 0:
-        pb.text(11, f'Firmware {fw_version}  |  {ts}  |  ALL {total} TESTS PASSED', bold=True, color=GREEN)
-    elif failed > 0:
-        pb.text(11, f'Firmware {fw_version}  |  {ts}  |  {failed} FAILED of {total} tests', bold=True, color=RED)
+    bad = summary['failed'] + summary['errors']
+    if bad:
+        pb.text(11, f'Firmware {fw_version} | {bad} FAILED/ERROR of {summary["total"]} executed',
+                bold=True, color=RED)
     else:
-        pb.text(10, f'Firmware {fw_version}  |  {ts}  |  {total} tests: {passed} passed, {skipped} pending')
+        pb.text(11, f'Firmware {fw_version} | {summary["passed"]} passed, '
+                f'{summary["skipped"]} skipped, {summary["total"]} total',
+                bold=True, color=GREEN)
+    pb.text(7, f'Generated: {generated_at}')
+    pb.text(7, f'Firmware SHA: {provenance.get("firmware_sha", "MISSING")}')
+    pb.text(7, f'Python SHA: {provenance.get("python_sha", "MISSING")}')
+    pb.text(7, f'Firmware PR: {provenance.get("firmware_pr", "MISSING")}')
+    pb.text(7, f'Python PR: {provenance.get("python_pr", "MISSING")}')
+    pb.text(7, f'Generator blob SHA: {provenance.get("generator_blob_sha", "MISSING")}')
+    pb.text(7, f'Generator SHA-256: {provenance.get("generator_sha256", "MISSING")}')
+    pb.text(7, f'Build: {provenance.get("build_label", "MISSING")}')
+    for line in _w(f'CI run: {provenance.get("run_url", "MISSING")}', 88):
+        pb.text(7, line)
+    pb.text(7, 'PDF SHA-256 is recorded in test-report.pdf.sha256 and the artifact manifest.')
+    pb.text(7, 'Authoritative suite reconciliation (screenshot rerun excluded):', bold=True)
+    for source, counts in sorted(suite_counts.items()):
+        pb.text(7, '%s: %d total, %d passed, %d skipped, %d failed/error' % (
+            source, counts['total'], counts['passed'], counts['skipped'],
+            counts['failed'] + counts['errors']))
+    pb.text(7, f'Release evidence index: {catalog_passed}/{catalog_total} passed '
+            f'({catalog_failed} failed/error; skipped entries labelled explicitly)')
     pb.gap(6)
-    pb.text(12, 'Sections', bold=True)
+    pb.text(12, 'Release Evidence Index', bold=True)
     _shown_tested = _shown_pending = False
     for letter, title, mf, _, _, tests in test_sections:
         has_any = any(_lookup(results, t[1], t[2]) for t in tests)
@@ -1186,31 +1444,38 @@ def render(output_path, fw_version, results, screenshot_dir=None):
             pb.check(9, f'{tid} {meth}', r)
             pb.text(7, f'{title}  ({mod}.py)')
             for cline in _w(ctx, 95): pb.text(7, cline)
-            # Embed OLED screenshots -- use _pick_best_frame for the primary image,
-            # then show up to 2 more frames for multi-screen flows (signing, swaps)
-            if screenshot_dir:
-                test_dir = os.path.join(screenshot_dir, mod.replace('test_',''), meth)
-                btn_files = sorted(f for f in os.listdir(test_dir) if f.startswith('btn')) if os.path.isdir(test_dir) else []
-                best = _pick_best_frame(test_dir, btn_files)
-                if best:
-                    # Show the best frame (most representative)
-                    try:
-                        pb.need(55)
-                        pb.image(best, display_w=384, display_h=96)
-                    except Exception:
-                        pass
-                    # For multi-screen tests, show up to 2 additional frames
-                    test_frames = btn_files[2:] if len(btn_files) > 2 else []
-                    extra = [f for f in test_frames if os.path.join(test_dir, f) != best][:2]
-                    for frame in extra:
-                        try:
-                            pb.need(55)
-                            pb.image(os.path.join(test_dir, frame), display_w=384, display_h=96)
-                        except Exception:
-                            pass
-                    if len(btn_files) > 5:
-                        pb.text(6, f'({len(btn_files)} OLED frames captured, showing best {min(3, len(test_frames)+1)})', color=GRAY)
-                elif scr:
+            # Evidence is intentionally not ranked or truncated. The previous
+            # "best three" heuristic selected setup screens and dropped the
+            # Solana scheme-binding screen. An audit artifact must retain the
+            # complete ordered review or fail, never guess what matters.
+            if screenshot_dir and scr:
+                test_dir = os.path.join(
+                    screenshot_dir, mod.replace('test_', '', 1), meth
+                )
+                groups = SCREENSHOT_GROUPS.get((mod, meth))
+                rendered = 0
+                if groups:
+                    for group in groups:
+                        group_dir = os.path.join(test_dir, group)
+                        frames = sorted(
+                            f for f in os.listdir(group_dir)
+                            if f.startswith('btn') and f.endswith('.png')
+                        ) if os.path.isdir(group_dir) else []
+                        pb.text(7, f'OLED sequence: {group} ({len(frames)} frames)', bold=True)
+                        for frame in frames:
+                            pb.image(os.path.join(group_dir, frame), display_w=384, display_h=96)
+                            rendered += 1
+                else:
+                    frames = sorted(
+                        f for f in os.listdir(test_dir)
+                        if f.startswith('btn') and f.endswith('.png')
+                    ) if os.path.isdir(test_dir) else []
+                    if frames:
+                        pb.text(7, f'Complete ordered OLED capture ({len(frames)} frames)', bold=True)
+                    for frame in frames:
+                        pb.image(os.path.join(test_dir, frame), display_w=384, display_h=96)
+                        rendered += 1
+                if not rendered and scr:
                     pb.text(7, f'OLED needed: {", ".join(scr)}', color=GRAY)
             elif scr:
                 pb.text(7, f'OLED needed: {", ".join(scr)}', color=GRAY)
@@ -1228,7 +1493,129 @@ def render(output_path, fw_version, results, screenshot_dir=None):
 
     pb.finish()
     pdf.write(output_path)
-    print(f'{output_path}: fw={fw_version}, {len(active)} sections, {total} tests ({passed} passed, {failed} failed, {skipped} pending)')
+    print(f'{output_path}: fw={fw_version}, {summary["total"]} authoritative tests '
+          f'({summary["passed"]} passed, {summary["failed"] + summary["errors"]} failed/error, '
+          f'{summary["skipped"]} skipped); evidence index {catalog_passed}/{catalog_total} passed')
+
+def active_catalog(fw_version):
+    for section in SECTIONS:
+        if not ver_ge(fw_version, section[2]):
+            continue
+        for test in section[5]:
+            yield test
+
+
+def required_release_tests(fw_version, derived_required=()):
+    required = set()
+    for version, tests in RELEASE_REQUIRED_TESTS.items():
+        if ver_ge(fw_version, version):
+            required.update(tests)
+    required.update(derived_required)
+    return required
+
+
+def derived_catalog_tests(fw_version, derived_sources):
+    curated = {
+        (mod, meth)
+        for tid, mod, meth, title, context, screenshots
+        in active_catalog(fw_version)
+    }
+    tests = []
+    for index, pair in enumerate(sorted(set(derived_sources) - curated), 1):
+        mod, meth = pair
+        source = derived_sources[pair]
+        tests.append((
+            'CHG%03d' % index, mod, meth,
+            'Changed release test',
+            'Changed since the last shipped tag; machine-derived from %s.' %
+            source,
+            [],
+        ))
+    return tests
+
+
+def catalog_integrity(fw_version, derived_sources=None):
+    ids = set()
+    pairs = set()
+    errors = []
+    for tid, mod, meth, title, context, screenshots in active_catalog(fw_version):
+        if tid in ids:
+            errors.append('duplicate test id %s' % tid)
+        ids.add(tid)
+        pair = (mod, meth)
+        if pair in pairs:
+            errors.append('duplicate catalog test %s::%s' % pair)
+        pairs.add(pair)
+    for tid, mod, meth, title, context, screenshots in derived_catalog_tests(
+            fw_version, derived_sources or {}):
+        if tid in ids:
+            errors.append('duplicate test id %s' % tid)
+        ids.add(tid)
+        pair = (mod, meth)
+        if pair in pairs:
+            errors.append('duplicate catalog test %s::%s' % pair)
+        pairs.add(pair)
+    return errors
+
+
+def selected_screenshot_sequences(screenshot_root, mod, meth, wants_screens):
+    if not wants_screens:
+        return []
+    test_dir = os.path.join(
+        screenshot_root, mod.replace('test_', '', 1), meth
+    )
+    groups = SCREENSHOT_GROUPS.get((mod, meth))
+    sequences = []
+    if groups:
+        for group in groups:
+            group_dir = os.path.join(test_dir, group)
+            frames = sorted(
+                os.path.relpath(os.path.join(group_dir, frame), screenshot_root)
+                for frame in os.listdir(group_dir)
+                if frame.startswith('btn') and frame.endswith('.png')
+            ) if os.path.isdir(group_dir) else []
+            sequences.append({'label': group, 'frames': frames})
+    else:
+        frames = sorted(
+            os.path.relpath(os.path.join(test_dir, frame), screenshot_root)
+            for frame in os.listdir(test_dir)
+            if frame.startswith('btn') and frame.endswith('.png')
+        ) if os.path.isdir(test_dir) else []
+        sequences.append({'label': 'complete', 'frames': frames})
+    return sequences
+
+
+def completeness_manifest(fw_version, results, screenshot_root, summary,
+                          suite_counts, provenance, generated_at,
+                          derived_sources=None, derived_required=()):
+    derived_sources = derived_sources or {}
+    required = required_release_tests(fw_version, derived_required)
+    catalog = []
+    entries = list(active_catalog(fw_version)) + derived_catalog_tests(
+        fw_version, derived_sources
+    )
+    for tid, mod, meth, title, context, screenshots in entries:
+        catalog.append({
+            'id': tid,
+            'module': mod,
+            'method': meth,
+            'status': _lookup(results, mod, meth),
+            'release_required': (mod, meth) in required,
+            'declares_screens': bool(screenshots),
+            'selected_sequences': selected_screenshot_sequences(
+                screenshot_root, mod, meth, screenshots
+            ),
+        })
+    return {
+        'generated_at': generated_at,
+        'provenance': provenance,
+        'authoritative_summary': summary,
+        'suite_reconciliation': suite_counts,
+        'release_required_count': len(required),
+        'catalog_entry_count': len(catalog),
+        'catalog': catalog,
+    }
+
 
 def screenshot_filter(fw_version):
     """Return pytest -k expression for tests with non-empty screenshot expectations.
@@ -1282,12 +1669,20 @@ def screenshot_audit(fw_version, screenshot_root, junit_path=None):
             if (mod, meth) in skipped:
                 continue
             d = _os.path.join(screenshot_root, mod.replace('test_', '', 1), meth)
-            if not _os.path.isdir(d) or not [f for f in _os.listdir(d) if f.endswith('.png')]:
+            groups = SCREENSHOT_GROUPS.get((mod, meth))
+            if groups:
+                for group in groups:
+                    gd = _os.path.join(d, group)
+                    if (not _os.path.isdir(gd) or not
+                            [f for f in _os.listdir(gd) if f.endswith('.png')]):
+                        missing.append((mod, '%s [%s]' % (meth, group)))
+            elif (not _os.path.isdir(d) or not
+                  [f for f in _os.listdir(d) if f.endswith('.png')]):
                 missing.append((mod, meth))
     return (len(missing) == 0, missing)
 
 
-def validate_junit(fw_version, results):
+def validate_junit(fw_version, results, derived_required=()):
     """Check SECTIONS tests against JUnit results. Returns (passed, failed_list).
 
     A test is considered failed if it appears in SECTIONS for this firmware version
@@ -1304,6 +1699,19 @@ def validate_junit(fw_version, results):
                 failures.append((tid, mod, meth, status))
             elif not status:
                 failures.append((tid, mod, meth, 'missing'))
+    catalog_by_pair = {
+        (mod, meth): tid
+        for tid, mod, meth, title, context, screenshots
+        in active_catalog(fw_version)
+    }
+    for mod, meth in sorted(required_release_tests(fw_version,
+                                                   derived_required)):
+        status = _lookup(results, mod, meth)
+        if status != 'pass':
+            item = (catalog_by_pair.get((mod, meth), 'REQUIRED'),
+                    mod, meth, status or 'missing')
+            if item not in failures:
+                failures.append(item)
     return (len(failures) == 0, failures)
 
 
@@ -1321,7 +1729,41 @@ def main():
                    help='Print pytest -k expression for tests needing screenshots, then exit')
     p.add_argument('--validate-junit', action='store_true',
                    help='Validate JUnit results against SECTIONS, exit non-zero on failures')
+    p.add_argument('--firmware-sha', default=None, help='exact 40-character firmware commit')
+    p.add_argument('--python-sha', default=None, help='exact 40-character python-keepkey commit')
+    p.add_argument('--firmware-pr', default=None, help='immutable firmware PR URL')
+    p.add_argument('--python-pr', default=None, help='immutable python-keepkey PR URL')
+    p.add_argument('--generator-blob-sha', default=None,
+                   help='exact Git blob SHA of this generator')
+    p.add_argument('--generator-sha256', default=None,
+                   help='SHA-256 of this generator file')
+    p.add_argument('--build-label', default=None, help='human-readable exact-head build label')
+    p.add_argument('--run-url', default=None, help='immutable CI run URL')
+    p.add_argument('--completeness-output', default=None,
+                   help='write machine-readable catalog/frame completeness JSON')
+    p.add_argument('--required-tests-manifest', default=None,
+                   help='diff-derived tests that must be catalogued and pass')
     args = p.parse_args()
+
+    derived_required = set()
+    derived_sources = {}
+    if args.required_tests_manifest:
+        with open(args.required_tests_manifest, encoding='utf-8') as source:
+            required_manifest = json.load(source)
+        if required_manifest.get('schema') != 1:
+            print('ERROR: unsupported required-tests manifest schema',
+                  file=sys.stderr)
+            sys.exit(2)
+        for entry in required_manifest.get('tests', []):
+            module = entry.get('module')
+            method = entry.get('method')
+            if not module or not method:
+                print('ERROR: malformed required test entry: %r' % entry,
+                      file=sys.stderr)
+                sys.exit(2)
+            derived_sources[(module, method)] = entry.get('source', 'unknown')
+            if entry.get('applicable', True):
+                derived_required.add((module, method))
 
     fw = args.fw_version
     if not fw:
@@ -1348,7 +1790,7 @@ def main():
             print('ERROR: --validate-junit requires --junit=<path>', file=sys.stderr)
             sys.exit(2)
         results = parse_junit(args.junit)
-        ok, failures = validate_junit(fw, results)
+        ok, failures = validate_junit(fw, results, derived_required)
         if ok:
             print(f'SECTIONS validation passed: all tests for fw {fw} are pass or skip')
             sys.exit(0)
@@ -1358,8 +1800,94 @@ def main():
                 print(f'  {tid} {mod}::{meth} -> {status}')
             sys.exit(1)
 
-    results = parse_junit(args.junit) if args.junit else {}
-    render(args.output, fw, results, args.screenshots)
+    if not args.junit:
+        print('ERROR: report generation requires authoritative --junit input', file=sys.stderr)
+        sys.exit(2)
+    required_provenance = {
+        'firmware_sha': args.firmware_sha,
+        'python_sha': args.python_sha,
+        'firmware_pr': args.firmware_pr,
+        'python_pr': args.python_pr,
+        'generator_blob_sha': args.generator_blob_sha,
+        'generator_sha256': args.generator_sha256,
+        'build_label': args.build_label,
+        'run_url': args.run_url,
+    }
+    missing_provenance = [k for k, value in required_provenance.items() if not value]
+    if missing_provenance:
+        print('ERROR: missing report provenance: %s' % ', '.join(missing_provenance),
+              file=sys.stderr)
+        sys.exit(2)
+    for label, value in (('firmware', args.firmware_sha), ('python', args.python_sha)):
+        if len(value) != 40 or any(c not in '0123456789abcdef' for c in value.lower()):
+            print('ERROR: %s SHA is not an exact 40-character commit: %s' % (label, value),
+                  file=sys.stderr)
+            sys.exit(2)
+    if (len(args.generator_blob_sha) != 40 or
+            any(c not in '0123456789abcdef'
+                for c in args.generator_blob_sha.lower())):
+        print('ERROR: generator blob SHA is not exact: %s' %
+              args.generator_blob_sha, file=sys.stderr)
+        sys.exit(2)
+    if (len(args.generator_sha256) != 64 or
+            any(c not in '0123456789abcdef'
+                for c in args.generator_sha256.lower())):
+        print('ERROR: generator SHA-256 is not exact: %s' %
+              args.generator_sha256, file=sys.stderr)
+        sys.exit(2)
+    catalog_errors = catalog_integrity(fw, derived_sources)
+    if catalog_errors:
+        print('ERROR: release evidence catalog is inconsistent:', file=sys.stderr)
+        for error in catalog_errors:
+            print('  %s' % error, file=sys.stderr)
+        sys.exit(1)
+
+    results = parse_junit(args.junit)
+    summary = junit_summary(args.junit)
+    suite_counts = junit_reconciliation(args.junit)
+    reconciled = {
+        key: sum(counts[key] for counts in suite_counts.values())
+        for key in summary
+    }
+    if reconciled != summary:
+        print('ERROR: per-suite JUnit counts do not reconcile: %s != %s' %
+              (reconciled, summary), file=sys.stderr)
+        sys.exit(1)
+    if not summary['total']:
+        print('ERROR: authoritative JUnit contains no testcases', file=sys.stderr)
+        sys.exit(1)
+    if summary['failed'] or summary['errors']:
+        print('ERROR: authoritative JUnit is not green: %s' % summary, file=sys.stderr)
+        sys.exit(1)
+    ok, failures = validate_junit(fw, results, derived_required)
+    if not ok:
+        print('ERROR: release evidence index has failed or missing checks:', file=sys.stderr)
+        for tid, mod, meth, status in failures:
+            print('  %s %s::%s -> %s' % (tid, mod, meth, status), file=sys.stderr)
+        sys.exit(1)
+    if not args.screenshots:
+        print('ERROR: report generation requires --screenshots evidence', file=sys.stderr)
+        sys.exit(2)
+    ok, missing = screenshot_audit(fw, args.screenshots, args.junit)
+    if not ok:
+        print('ERROR: screenshot evidence is incomplete:', file=sys.stderr)
+        for mod, meth in missing:
+            print('  %s::%s' % (mod, meth), file=sys.stderr)
+        sys.exit(1)
+    generated_at = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    completeness = completeness_manifest(
+        fw, results, args.screenshots, summary, suite_counts,
+        required_provenance, generated_at, derived_sources, derived_required
+    )
+    if not args.completeness_output:
+        print('ERROR: report generation requires --completeness-output',
+              file=sys.stderr)
+        sys.exit(2)
+    with open(args.completeness_output, 'w') as output:
+        json.dump(completeness, output, indent=2, sort_keys=True)
+        output.write('\n')
+    render(args.output, fw, results, args.screenshots, summary,
+           required_provenance, suite_counts, generated_at, derived_sources)
 
 if __name__ == '__main__':
     main()

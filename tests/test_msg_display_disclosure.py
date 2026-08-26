@@ -52,6 +52,7 @@ case.
 
 from __future__ import print_function
 
+import os
 import unittest
 
 import common
@@ -69,17 +70,28 @@ class ScreenRecorder(object):
     displayed; reading it afterwards would only ever see the home screen.
     """
 
-    def __init__(self, client, answer=True):
+    def __init__(self, client, answer=True, screenshot_group=None):
         self.client = client
         self.answer = answer
+        self.screenshot_group = screenshot_group
         self.screens = []
         self._original = None
+        self._original_screenshot_dir = None
+        self._original_screenshot_id = None
 
     def __enter__(self):
         client = self.client
         recorder = self
 
         self._original = client.callback_ButtonRequest
+        if self.screenshot_group and getattr(client, 'screenshot_dir', None):
+            self._original_screenshot_dir = client.screenshot_dir
+            self._original_screenshot_id = client.screenshot_id
+            client.screenshot_dir = os.path.join(
+                client.screenshot_dir, self.screenshot_group
+            )
+            os.makedirs(client.screenshot_dir, exist_ok=True)
+            client.screenshot_id = 0
 
         def recording_callback(msg):
             try:
@@ -112,6 +124,9 @@ class ScreenRecorder(object):
 
     def __exit__(self, exc_type, exc_value, tb):
         self.client.callback_ButtonRequest = self._original
+        if self._original_screenshot_dir is not None:
+            self.client.screenshot_dir = self._original_screenshot_dir
+            self.client.screenshot_id = self._original_screenshot_id
         return False
 
     @property
@@ -131,6 +146,12 @@ class TestDisplayDisclosesSignedContent(common.KeepKeyTest):
     def setUp(self):
         super(TestDisplayDisclosesSignedContent, self).setUp()
         self.requires_firmware(self.MIN_FIRMWARE)
+        # These are positive display-binding controls, not refusal tests. A
+        # fresh emulator is uninitialized; without an explicit seed setup every
+        # request is rejected before its first ButtonRequest, the differential
+        # cases vacuously "pass", and the only non-vacuity control skips. Keep
+        # the fixture capable of reaching the confirmation path.
+        self.setup_mnemonic_allallall()
 
     # ── helpers ─────────────────────────────────────────────────────────
 
@@ -244,8 +265,11 @@ class TestDisplayDisclosesSignedContent(common.KeepKeyTest):
         empty tuples and the suite would pass while showing the user nothing.
         """
         screens = self._sign_message_screens(b"hello")
-        if screens is None:
-            self.skipTest("device refused to sign the control message")
+        self.assertIsNotNone(
+            screens,
+            "device refused the control request; the display-binding A/B "
+            "tests did not prove they can reach a confirmation path",
+        )
         self.assertGreater(
             len(screens), 0,
             "signing produced no ButtonRequest, so nothing was shown to the "
