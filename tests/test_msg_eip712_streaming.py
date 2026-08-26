@@ -52,6 +52,29 @@ SPEC_MESSAGE_HASH = "c52c0ee5d84264471806290a3f2c4cecfc5490626bf912d01f240d7a274
 
 class TestEip712StreamHelpers(unittest.TestCase):
 
+    def test_review_identifiers_are_exact_and_unambiguous(self):
+        doc = {
+            'types': {
+                'Permit': [
+                    {'name': 'value', 'type': 'uint256'},
+                    {'name': 'value', 'type': 'uint256'},
+                ],
+            },
+        }
+        with self.assertRaises(es.Eip712Error) as duplicate:
+            es.struct_members(doc, 'Permit')
+        self.assertIn('Duplicate', str(duplicate.exception))
+
+        doc['types']['Permit'][1]['name'] = 'identifier_that_would_be_truncated'
+        with self.assertRaises(es.Eip712Error) as overlong:
+            es.struct_members(doc, 'Permit')
+        self.assertIn('canonical EIP-712 identifier', str(overlong.exception))
+
+        doc['types']['Permit'][1]['name'] = 'amount%08x'
+        with self.assertRaises(es.Eip712Error) as malformed:
+            es.struct_members(doc, 'Permit')
+        self.assertIn('canonical EIP-712 identifier', str(malformed.exception))
+
     def test_multidimensional_arrays_are_walked_outermost_first(self):
         doc = {
             'types': {
