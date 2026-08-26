@@ -111,11 +111,18 @@ class TestDeviceRecovery(common.KeepKeyTest):
         ret = self.client.call_raw(proto.ButtonAck())
 
         mnemonic_words = mnemonic.split(' ')
+        captured_cipher = False
 
         for index, word in enumerate(mnemonic_words):
             for character in word:
                 self.assertIsInstance(ret, proto.CharacterRequest)
                 cipher = self.client.debug.read_recovery_cipher()
+                if not captured_cipher:
+                    # CharacterRequest is driven manually and never reaches
+                    # callback_ButtonRequest(); capture only after DebugLink
+                    # proves this is the active randomized cipher grid.
+                    self.client.capture_oled()
+                    captured_cipher = True
 
                 encoded_character = cipher[ord(character) - 97]
                 ret = self.client.call_raw(proto.CharacterAck(character=encoded_character))

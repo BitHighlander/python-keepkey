@@ -87,6 +87,10 @@ class TestDeviceReset(common.KeepKeyTest):
         mnemonic = []
         while isinstance(resp, proto.ButtonRequest):
             mnemonic.append(self.client.debug.read_reset_word())
+            if len(mnemonic) == 1:
+                # Manual call_raw() flow: bind the report evidence to a word
+                # the DebugLink confirms is currently on the device.
+                self.client.capture_oled()
             self.client.debug.press_yes()
             resp = self.client.call_raw(proto.ButtonAck())
 
@@ -132,6 +136,7 @@ class TestDeviceReset(common.KeepKeyTest):
         # Device announces the on-device dice entry screen
         self.assertIsInstance(ret, proto.ButtonRequest)
         self.assertEqual(ret.code, proto_types.ButtonRequest_DiceRoll)
+        self.client.capture_oled()
 
         # Ack without blocking on the reply: the device only leaves the dice
         # screen once the rolls are complete, and input is ignored until the
@@ -169,6 +174,7 @@ class TestDeviceReset(common.KeepKeyTest):
         dice_digest = self.client.debug.read_dice_digest()
         self.assertEqual(dice_digest,
                          hashlib.sha256(expected.encode('ascii')).digest())
+        self.client.capture_oled()
 
         self.client.debug.press_yes()
         ret = self.client.call_raw(proto.ButtonAck())
