@@ -3233,6 +3233,9 @@ def screenshot_filter(fw_version):
 MUST_RUN_MODULES = {
     'test_msg_signtx_taproot': '7.0.0',
     'test_msg_getaddress_taproot': '7.0.0',
+    # GH #516: all three Uniswap liquidity tests used to skip together on the
+    # emulator, leaving a daily-driver signing path completely unexercised.
+    'test_msg_ethereum_erc20_uniswap_liquidity': '7.16.0',
     # R-4.1. Gated on requires_message('LoadClearsignSigner'), so if provider
     # loading regressed, all four would skip and the report would certify a
     # feature it never exercised.
@@ -3244,22 +3247,22 @@ MUST_RUN_MODULES = {
 # remains mandatory in both products, and the expected build variant comes from
 # CI rather than the firmware identity being tested.
 FULL_FEATURE_ONLY_MUST_RUN_MODULES = {
+    'test_msg_ethereum_erc20_uniswap_liquidity',
     'test_msg_solana_lut_attestation',
 }
 
 
 def screenshot_audit(fw_version, screenshot_root, junit_path=None):
-    """Which SECTIONS tests DECLARED screens but captured none?
+    """Which SECTIONS tests captured fewer frames than they declared?
 
     The CI gate was `total PNG count > 0`, which a single captured suite
     satisfies. That cannot distinguish "captured everything" from "captured
     something": in the 7.14.2 round, 345 PNGs were produced while every suite
     the release actually changed captured zero, and the phase reported healthy.
 
-    Returns (ok, missing) where missing is a list of (module, method) that
-    declared a non-empty screenshot list, were not skipped, and produced no
-    PNG directory. Skipped tests are not missing -- a version-gated test
-    cannot draw.
+    Returns (ok, missing) where missing contains
+    (module, method, expected_count, captured_count). Skipped tests are not
+    missing -- a version-gated test cannot draw.
     """
     import os as _os
     skipped = set()
@@ -3283,8 +3286,10 @@ def screenshot_audit(fw_version, screenshot_root, junit_path=None):
             if (mod, meth) in skipped:
                 continue
             d = _os.path.join(screenshot_root, mod.replace('test_', '', 1), meth)
-            if not _os.path.isdir(d) or not [f for f in _os.listdir(d) if f.endswith('.png')]:
-                missing.append((mod, meth))
+            pngs = ([f for f in _os.listdir(d) if f.endswith('.png')]
+                    if _os.path.isdir(d) else [])
+            if len(pngs) < len(scr):
+                missing.append((mod, meth, len(scr), len(pngs)))
     return (len(missing) == 0, missing)
 
 
@@ -3344,9 +3349,10 @@ def main():
         if ok:
             print('screenshot audit: every declared screen was captured')
             sys.exit(0)
-        print('screenshot audit FAILED -- declared screens with no capture:')
-        for mod, meth in missing:
-            print('  %s::%s' % (mod, meth))
+        print('screenshot audit FAILED -- fewer captures than declared screens:')
+        for mod, meth, expected, captured in missing:
+            print('  %s::%s (declared %d, captured %d)' %
+                  (mod, meth, expected, captured))
         sys.exit(1)
     if args.screenshot_filter:
         print(screenshot_filter(fw))

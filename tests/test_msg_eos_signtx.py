@@ -568,27 +568,17 @@ class TestMsgEosSignTx(common.KeepKeyTest):
                 num_actions=1),
             [self.action_updateauth(True)])
 
-        # This authorization has accounts_count=1, waits_count=0 -- exactly
-        # the case keepkey-firmware@0f4dafcca's eos_hashAuthorization() fix
-        # changed, by correcting the waits[] serialization loop bound from
-        # accounts_count to waits_count.
-        #
-        # There is no reliable, client-observable way to gate this on
-        # firmware version: this suite's own CI pins specific reference
-        # commits rather than tracking alpha live (see ci.yml's `integration`
-        # job -- "PINNED, not alpha... bump deliberately"), and every commit
-        # on the alpha line reports the SAME 7.16.0 version string regardless
-        # of which of those commits it actually is. Neither of this repo's
-        # currently-pinned references (the `integration` job's SHA, or the
-        # RC18/7.15.0 compatibility job) has this fix yet -- only current
-        # alpha itself does, which is what keepkey-firmware's own CI builds
-        # and tests against. Accept both the pre-fix and post-fix hash rather
-        # than assert one and break whichever reference doesn't have it yet;
-        # a THIRD, different hash still fails the test.
-        old_hash = b"fb936ef1be4bda680d93bd10b6d062357d8dd7272038a706dc0d61a91f39c5ee"
-        new_hash = b"5938294e65cf9e8b5dd5f2b204503b4825f277e6f4a2d5ab7a55a31065a23af1"
-        actual_hash = binascii.hexlify(res.hash)
-        self.assertIn(actual_hash, (old_hash, new_hash))
+        # Firmware #568 (7.16.0) fixed eos_hashAuthorization() to serialize
+        # waits_count entries, not accounts_count entries. This SLIP-48 vector
+        # has one delegated account and zero waits; the old golden committed a
+        # phantom zero wait that was neither present nor confirmed on-device.
+        version = (self.client.features.major_version,
+                   self.client.features.minor_version,
+                   self.client.features.patch_version)
+        expected = ("5938294e65cf9e8b5dd5f2b204503b4825f277e6f4a2d5ab7a55a31065a23af1"
+                    if version >= (7, 16, 0)
+                    else "fb936ef1be4bda680d93bd10b6d062357d8dd7272038a706dc0d61a91f39c5ee")
+        self.assertEqual(binascii.hexlify(res.hash), expected)
 
     def test_deleteauth(self):
         self.requires_fullFeature()

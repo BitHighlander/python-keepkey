@@ -337,6 +337,7 @@ class TestZcashShieldedSigningDevice(common.KeepKeyTest):
         verification is [s]G = R + [H(R||rk||M)]rk and rk and M are shared. The
         Orchard bundle's valueBalance never enters the device's fee check.
         """
+        self.requires_firmware(self.IRONWOOD_FIRMWARE)
         actions = [note_action(CMX_IRONWOOD)]
         kwargs = sign_kwargs(actions, ironwood=True)
         # Anything but the ZIP-229 v6 empty-bundle digest must be refused.
