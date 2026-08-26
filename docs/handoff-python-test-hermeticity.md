@@ -30,9 +30,9 @@ Affected surfaces:
   mode for every KeepKeyTest.
 - tests/conftest.py rejects external DNS, socket, and HTTP access per test while
   permitting only loopback emulator traffic and Unix-domain sockets.
-- .github/workflows/ci.yml checks fixture integrity, adds a kernel outbound-new-
-  connection deny rule during authoritative pytest, and records the manifest
-  SHA-256 in every summary.
+- .github/workflows/ci.yml checks fixture integrity, permits the exact local
+  emulator container IP, rejects every other new non-loopback connection during
+  authoritative pytest, and records the manifest SHA-256 in every summary.
 - tests/tx_fixture_manifest.py and tests/test_tx_fixture_integrity.py account
   for every fixture, reconstruct canonical transactions, recompute every txid,
   test cwd independence and fail-closed misses, and statically reject new
