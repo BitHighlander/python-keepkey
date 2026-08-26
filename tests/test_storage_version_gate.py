@@ -128,7 +128,13 @@ if _PYKEEPKEY not in sys.path:
 # address - 0x08000000. The three storage sectors come from
 # flash_sector_map[] in include/keepkey/board/memory.h.
 SECTOR_OFFSETS = (0x4000, 0x8000, 0xC000)  # FLASH_STORAGE1/2/3
-SECTOR_RECORD_LEN = 2572  # sizeof(flash_temp) in storage_commit()
+STORAGE_SECTOR_LEN = 0x4000
+STORAGE_GENERATION_OFFSET = 41
+STORAGE_GENERATION_LEN = 3
+STORAGE_RECORD_DATA_LEN = 2572
+STORAGE_RECORD_TRAILER_MAGIC = b"crc1"
+STORAGE_RECORD_CRC_OFFSET = 2576
+STORAGE_RECORD_LEN = 2580
 
 # STORAGE_MAGIC_STR, include/keepkey/board/keepkey_board.h
 STORAGE_MAGIC = b"stor"
@@ -178,6 +184,19 @@ MNEMONIC_ALL = " ".join(["all"] * 12)
 LABEL = "storagegate"
 PIN = "1234"
 BIP44_ADDRESS_N = [2147483692, 2147483648, 2147483648, 0, 0]  # m/44'/0'/0'/0/0
+
+
+def _storage_crc(data):
+    """STM32 CRC-32/MPEG-2 over native little-endian 32-bit words."""
+    if len(data) != STORAGE_RECORD_DATA_LEN or len(data) % 4:
+        raise ValueError("storage CRC requires the complete word-aligned record")
+    crc = 0xFFFFFFFF
+    for pos in range(0, len(data), 4):
+        crc ^= struct.unpack("<I", data[pos:pos + 4])[0]
+        for _ in range(32):
+            crc = ((crc << 1) ^ (0x04C11DB7 if crc & 0x80000000 else 0))
+            crc &= 0xFFFFFFFF
+    return crc
 
 
 # ---------------------------------------------------------------------------
@@ -547,19 +566,40 @@ class Emulator(object):
             return f.read()
 
     def active_sector(self):
-        """Offset find_active_storage() would pick: FIRST sector with the magic.
-
-        lib/board/memory.c scans FLASH_STORAGE1..3 in order and takes the first
-        one whose first four bytes are "stor". Order matters, not recency.
-        """
+        """Mirror find_active_storage(): newest verified record, else legacy."""
         img = self.image()
+        found = None
+        found_verified = False
+        newest_generation = 0
         for off in SECTOR_OFFSETS:
-            if img[off:off + 4] == STORAGE_MAGIC:
-                return off
-        return None
+            record = img[off:off + STORAGE_RECORD_LEN]
+            if record[:4] != STORAGE_MAGIC:
+                continue
+            trailer = record[STORAGE_RECORD_DATA_LEN:STORAGE_RECORD_CRC_OFFSET]
+            legacy = trailer == b"\xff" * 4
+            verified = (
+                trailer == STORAGE_RECORD_TRAILER_MAGIC
+                and struct.unpack(
+                    "<I", record[STORAGE_RECORD_CRC_OFFSET:STORAGE_RECORD_LEN]
+                )[0] == _storage_crc(record[:STORAGE_RECORD_DATA_LEN]))
+            if not legacy and not verified:
+                continue
+
+            generation = sum(
+                record[STORAGE_GENERATION_OFFSET + i] << (8 * i)
+                for i in range(STORAGE_GENERATION_LEN))
+            delta = (generation - newest_generation) & 0x00FFFFFF
+            newer = delta != 0 and delta < 0x00800000
+            if ((verified and not found_verified)
+                    or (verified and newer)
+                    or (found is None and legacy)):
+                found = off
+                found_verified = verified
+                newest_generation = generation
+        return found
 
     def sector(self, off):
-        return self.image()[off:off + SECTOR_RECORD_LEN]
+        return self.image()[off:off + STORAGE_SECTOR_LEN]
 
     def patch(self, off, rel, data):
         assert self.proc is None, "patch the image only while the device is off"
@@ -574,6 +614,16 @@ class Emulator(object):
 
     def write_u32(self, off, rel, val):
         self.patch(off, rel, struct.pack("<I", val))
+
+    def refresh_crc(self, off):
+        """Keep an intentionally edited framed record valid for the next boot."""
+        record = self.sector(off)
+        if (record[STORAGE_RECORD_DATA_LEN:STORAGE_RECORD_CRC_OFFSET]
+                != STORAGE_RECORD_TRAILER_MAGIC):
+            raise AssertionError("cannot refresh CRC on an unframed record")
+        self.patch(
+            off, STORAGE_RECORD_CRC_OFFSET,
+            struct.pack("<I", _storage_crc(record[:STORAGE_RECORD_DATA_LEN])))
 
 
 def _teach_pin(client, pin):
@@ -626,6 +676,34 @@ def _capture(client):
     if os.environ.get("KEEPKEY_SCREENSHOT") != "1":
         return
     client._capture_oled()
+
+
+def _get_displayed_address(client):
+    """Display, capture, approve, and return the canonical Bitcoin address.
+
+    These restart tests own a standalone client and need the framebuffer while
+    the address confirmation is still active.  Driving the short exchange
+    explicitly makes that evidence independent of the generic callback loop.
+    """
+    from keepkeylib import messages_pb2 as proto
+    from keepkeylib import types_pb2 as types
+
+    resp = client.call_raw(proto.GetAddress(
+        address_n=BIP44_ADDRESS_N, coin_name="Bitcoin", show_display=True,
+        script_type=types.SPENDADDRESS))
+    if isinstance(resp, proto.PinMatrixRequest):
+        resp = client.call_raw(client.callback_PinMatrixRequest(resp))
+    if not isinstance(resp, proto.ButtonRequest):
+        raise AssertionError(
+            "displayed address did not request confirmation: %r" % resp)
+
+    client.capture_oled()
+    client.debug.press_yes()
+    resp = client.call_raw(proto.ButtonAck())
+    if not isinstance(resp, proto.Address):
+        raise AssertionError(
+            "displayed address did not return Address: %r" % resp)
+    return resp.address
 
 
 # ---------------------------------------------------------------------------
@@ -1029,6 +1107,16 @@ class TestStorageUpgradePreservation(unittest.TestCase):
                        b"\x00" * (V17_ENCSEC_SIZE - V16_ENCSEC_SIZE))
         self.emu.write_u32(off, OFF_ENCSEC_VERSION, 16)
         self.emu.write_u32(off, OFF_VERSION, 16)
+        # A shipped V16 record predates generation/CRC framing. Present it as
+        # legacy exactly as find_active_storage() expects; leaving the V20
+        # trailer behind with edited payload bytes would correctly classify
+        # this synthetic record as corrupt and wipe it, testing CRC rejection
+        # instead of migration.
+        self.emu.patch(
+            off, STORAGE_GENERATION_OFFSET, b"\x00" * STORAGE_GENERATION_LEN)
+        self.emu.patch(
+            off, STORAGE_RECORD_DATA_LEN,
+            b"\xff" * (STORAGE_RECORD_LEN - STORAGE_RECORD_DATA_LEN))
 
     # -- tests --------------------------------------------------------------
 
@@ -1075,9 +1163,7 @@ class TestStorageUpgradePreservation(unittest.TestCase):
             # show_display so the recovered address is ON SCREEN, not just on
             # the wire: the OLED frame is the report's evidence that the same
             # wallet came back.
-            self.assertEqual(
-                addr, c.get_address("Bitcoin", BIP44_ADDRESS_N,
-                                    show_display=True))
+            self.assertEqual(addr, _get_displayed_address(c))
         finally:
             c.close()
 
@@ -1121,8 +1207,7 @@ class TestStorageUpgradePreservation(unittest.TestCase):
                 "upgrading from 7.14.x loses its seed")
             self.assertEqual(LABEL, c.features.label)
             self.assertEqual(
-                addr, c.get_address("Bitcoin", BIP44_ADDRESS_N,
-                                    show_display=True),
+                addr, _get_displayed_address(c),
                 "the V16 wallet survived the boot but derives a DIFFERENT "
                 "address -- the migration corrupted the seed, which is worse "
                 "than a wipe because nothing announces it")
@@ -1182,10 +1267,11 @@ class TestStorageUpgradePreservation(unittest.TestCase):
             self.emu.read_u32(off, OFF_VERSION), STORAGE_VERSION_BTC_ONLY_BASE,
             "this emulator already stamps its wallets into the bitcoin-only "
             "band, so it is not the multi-chain firmware this test is about")
-        before = self.emu.sector(off)
         self.emu.write_u32(
             off, OFF_VERSION,
             STORAGE_VERSION_BTC_ONLY_BASE + self.emu.read_u32(off, OFF_VERSION))
+        self.emu.refresh_crc(off)
+        before = self.emu.sector(off)
 
         self.emu.boot()
         c = self.emu.client(self.method)
@@ -1202,22 +1288,21 @@ class TestStorageUpgradePreservation(unittest.TestCase):
 
         after = self.emu.sector(off)
         self.assertEqual(
-            before[:OFF_VERSION] + before[OFF_VERSION + 4:],
-            after[:OFF_VERSION] + after[OFF_VERSION + 4:],
+            before, after,
             "the locked boot MODIFIED the bitcoin-only record. The wallet is "
             "supposed to stay recoverable by reflashing bitcoin-only firmware")
 
         self.emu.write_u32(off, OFF_VERSION,
                            self.emu.read_u32(off, OFF_VERSION)
                            - STORAGE_VERSION_BTC_ONLY_BASE)
+        self.emu.refresh_crc(off)
         self.emu.boot()
         c = self.emu.client(self.method, pin=PIN)
         try:
             c.init_device()
             self.assertTrue(c.features.initialized)
             self.assertEqual(
-                addr, c.get_address("Bitcoin", BIP44_ADDRESS_N,
-                                    show_display=True),
+                addr, _get_displayed_address(c),
                 "the refused wallet did not come back intact, so 'refuse "
                 "rather than wipe' did not actually preserve anything")
         finally:
