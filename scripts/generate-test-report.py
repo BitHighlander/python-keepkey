@@ -1138,21 +1138,25 @@ SECTIONS = [
           'Failure on the wire.',
           []),
          ('E17', 'test_msg_ethereum_erc20_uniswap_liquidity', 'test_sign_uni_approve_liquidity_ETH',
-          'Uniswap V2 add-liquidity approve (pending)',
-          'PENDING, disclosed: known emulator limitation — an approve to an unknown (non-registry) '
-          'token contract cannot complete against the kkemu emulator (matches the sibling '
-          'add/remove-liquidity skips below); the device-firmware path is not in question, only '
-          'CI emulator coverage. Real-device testing is unaffected.',
-          []),
+          'Uniswap V2 LP-token approval',
+          'Approves the Uniswap V2 FOX/WETH LP token for the canonical router. The exact pool '
+          'identity and full-LP allowance are shown before the generic fee review, and the fixed '
+          'signature proves the reviewed transaction bytes are the bytes signed.',
+          ['Full LP allowance', 'LP token and pool address', 'Fee and final approval']),
          ('E18', 'test_msg_ethereum_erc20_uniswap_liquidity', 'test_sign_uni_add_liquidity_ETH',
-          'Uniswap V2 add liquidity ETH+token (pending)',
-          'PENDING, disclosed: same emulator limitation as E17 — a daily-driver LP-deposit flow '
-          'with no PDF proof on this build; tracked for real-device verification.',
-          []),
+          'Uniswap V2 add liquidity ETH+token',
+          'Clear-signs both desired/minimum FOX and ETH amounts, the signed recipient, and the '
+          'deadline before the final fee review. The fixed signature binds those confirmations '
+          'to the complete addLiquidityETH calldata.',
+          ['FOX desired amount', 'FOX minimum', 'Recipient', 'ETH desired amount',
+           'ETH minimum', 'Deadline', 'Fee and final approval']),
          ('E19', 'test_msg_ethereum_erc20_uniswap_liquidity', 'test_sign_uni_remove_liquidity_ETH',
-          'Uniswap V2 remove liquidity ETH+token (pending)',
-          'PENDING, disclosed: same emulator limitation as E17.',
-          []),
+          'Uniswap V2 remove liquidity ETH+token',
+          'Clear-signs the LP burn amount, minimum FOX and ETH outputs, the non-self signed '
+          'recipient, and deadline before the final fee review. This is the regression for the '
+          'recipient-confirmation path that previously cancelled after the user approved it.',
+          ['LP burn amount', 'FOX minimum', 'Recipient', 'ETH minimum', 'Deadline',
+           'Fee and final approval']),
          ('E20', 'test_msg_ethereum_thorchain_deposit', 'test_deposit_legacy_selector',
           'THORChain router deposit() (legacy selector)',
           'Cross-chain swap via the THORChain router contract — a daily-driver EVM<->THORChain '

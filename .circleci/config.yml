@@ -32,7 +32,7 @@ jobs:
             # Actions integration lane. Bump deliberately with that workflow.
             git init .
             git remote add origin https://github.com/BitHighlander/keepkey-firmware.git
-            git fetch --depth 1 origin ec9ced7f23b119878961ee6571da29b035cf11fb
+            git fetch --depth 1 origin 54b169a7036b29db22944d962fb666b50aef9083
             git checkout --detach FETCH_HEAD
 
             # Initialise firmware submodules
