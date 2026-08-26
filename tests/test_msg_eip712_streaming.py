@@ -212,6 +212,61 @@ class TestMsgEip712Streaming(common.KeepKeyTest):
         self.assertIsInstance(resp, eth.EthereumTypedDataSignature)
         self.assertEqual(len(resp.signature), 65)
 
+    def test_permit2_batch_walks_realistic_nested_array(self):
+        """The production Permit2 Batch shape, including trailing root fields.
+
+        The smaller Basket fixture proves the array primitive, but does not
+        exercise a multi-field child struct followed by more members on the
+        parent.  That is the shape Uniswap and swap providers actually send.
+        """
+        doc = {
+            "types": {
+                "EIP712Domain": [
+                    {"name": "name", "type": "string"},
+                    {"name": "chainId", "type": "uint256"},
+                    {"name": "verifyingContract", "type": "address"},
+                ],
+                "PermitDetails": [
+                    {"name": "token", "type": "address"},
+                    {"name": "amount", "type": "uint160"},
+                    {"name": "expiration", "type": "uint48"},
+                    {"name": "nonce", "type": "uint48"},
+                ],
+                "PermitBatch": [
+                    {"name": "details", "type": "PermitDetails[]"},
+                    {"name": "spender", "type": "address"},
+                    {"name": "sigDeadline", "type": "uint256"},
+                ],
+            },
+            "primaryType": "PermitBatch",
+            "domain": {
+                "name": "Permit2",
+                "chainId": 1,
+                "verifyingContract": "0x000000000022D473030F116dDEE9F6B43aC78BA3",
+            },
+            "message": {
+                "details": [
+                    {
+                        "token": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+                        "amount": "250000000",
+                        "expiration": "1893456000",
+                        "nonce": "1",
+                    },
+                    {
+                        "token": "0x6B175474E89094C44Da98b954EedeAC495271d0F",
+                        "amount": "500000000000000000000",
+                        "expiration": "1893456000",
+                        "nonce": "2",
+                    },
+                ],
+                "spender": "0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD",
+                "sigDeadline": "1893456000",
+            },
+        }
+        resp = self._walk(doc)
+        self.assertIsInstance(resp, eth.EthereumTypedDataSignature)
+        self.assertEqual(len(resp.signature), 65)
+
     def test_fixed_array_length_must_match_the_declared_size(self):
         """A declared dimension is part of the type string and so of typeHash.
 
