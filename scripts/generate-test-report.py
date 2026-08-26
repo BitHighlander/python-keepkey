@@ -526,10 +526,9 @@ SECTIONS = [
           '0x transformERC20 raw disclosure',
           'A 1480-byte transformERC20 payload exceeds one 1024-byte chunk. The device must NOT '
           'clear-sign it as a token swap, because the bytes past the initial chunk are hashed '
-          'without being decoded. With AdvancedMode on it falls to the raw path, where the byte '
-          'count shown must be the FULL length (1480), not the chunk length (1024) - a short '
-          'count would under-report what is being signed.',
-          ['Raw contract data screen showing the full byte count']),
+          'without being decoded. With AdvancedMode on it falls to the raw path, where the final '
+          'screen commits to all 1480 bytes with a Keccak-256 the user can compare to the host.',
+          ['Complete contract-data Keccak-256 commitment']),
          ('J2', 'test_msg_ethereum_erc20_0x_signtx', 'test_sign_0x_swap_ERC20_to_ETH',
           '0x sellToUniswap names both assets',
           'Clear-signing is only honest when BOTH token words resolve to known assets. This '
@@ -538,18 +537,24 @@ SECTIONS = [
           ['Swap screen naming both assets and amounts']),
          ('J3', 'test_msg_ethereum_erc20_0x_signtx', 'test_sign_longdata_swap',
           'Long 0x calldata stays disclosed',
-          'Calldata spanning multiple chunks must not silently lose its tail from the display '
-          'while remaining inside the signature.',
-          ['Contract data screen']),
+          'Calldata spanning multiple chunks must not silently lose its tail from the user-visible '
+          'commitment while remaining inside the signature.',
+          ['Complete contract-data Keccak-256 commitment']),
+         ('J4', 'test_msg_ethereum_signing_guards',
+          'test_streamed_calldata_tail_changes_user_commitment',
+          'A streamed tail changes the approval screens',
+          'Signs two equal-length payloads with identical initial 1024-byte chunks and a one-bit '
+          'difference in the final EthereumTxAck byte. Their ordered OLED frame sequences must '
+          'differ, proving the complete-calldata Keccak-256 -- not merely the visible prefix or '
+          'declared length -- reaches the user before either signature is emitted.',
+          ['Complete contract-data Keccak-256 commitment']),
          ('J8', 'test_msg_ethereum_signing_guards',
           'test_contract_handler_streamed_calldata_signs_full_data',
           'Streamed calldata is fully covered',
-          'Calldata delivered across several chunks must be hashed in full and disclosed in full. '
-          'This is the positive control for the chunk-completeness gate. NOTE: every test in '
-          'test_msg_ethereum_signing_guards currently SKIPS in CI under requires_firmware, so no '
-          'screen can be captured for it yet - the screenshot list stays empty until the gate '
-          'opens, rather than declaring an expectation nothing can satisfy.',
-          []),
+          'Calldata delivered across several chunks must be hashed in full, and the final OLED '
+          'commitment must cover that same complete byte string. This is the positive control for '
+          'the chunk-completeness gate.',
+          ['Complete contract-data Keccak-256 commitment']),
          ('J9', 'test_msg_ethereum_signing_guards', 'test_eip1559_requires_chain_id',
           'Omitted chain_id is refused before any screen',
           'Without a chain_id the device cannot name the network, and a signature would be '
