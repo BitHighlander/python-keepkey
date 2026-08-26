@@ -110,11 +110,19 @@ class KeepKeyTest(unittest.TestCase):
     def assertEndsWith(self, s, suffix):
         self.assertTrue(s.endswith(suffix), "'{}'.endswith('{}')".format(s, suffix))
 
-    def requires_firmware(self, ver_required):
+    def firmware_version(self):
         self.client.init_device()
         features = self.client.features
         version = "%s.%s.%s" % (features.major_version, features.minor_version, features.patch_version)
-        if semver.VersionInfo.parse(version) < semver.VersionInfo.parse(ver_required):
+        return semver.VersionInfo.parse(version)
+
+    def firmware_at_least(self, ver_required):
+        """Return whether the connected firmware includes a versioned feature."""
+        return self.firmware_version() >= semver.VersionInfo.parse(ver_required)
+
+    def requires_firmware(self, ver_required):
+        version = self.firmware_version()
+        if version < semver.VersionInfo.parse(ver_required):
             self.skipTest("Firmware version " + ver_required + " or higher is required to run this test")
 
     def requires_message(self, msg_name):
@@ -164,4 +172,3 @@ class KeepKeyTest(unittest.TestCase):
         self.skipTest("Full feature firmware required to run this test")
 
             
-
