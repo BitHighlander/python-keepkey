@@ -84,7 +84,9 @@ class TestMsgEthereumUniswaptxERC20(common.KeepKeyTest):
 
     def test_sign_uni_remove_liquidity_ETH(self):
         self.requires_fullFeature()
-        self.requires_firmware("7.1.0")
+        # Sending the withdrawn assets to a third-party recipient was refused
+        # by RC18. The reviewed external-recipient flow lands on the 7.16 line.
+        self.requires_firmware("7.16.0")
         self.setup_mnemonic_nopin_nopassphrase()
 
         # remove liquidity from the ETH/FOX pool
