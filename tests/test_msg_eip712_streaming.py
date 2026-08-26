@@ -143,7 +143,10 @@ class TestMsgEip712Streaming(common.KeepKeyTest):
         self.requires_fullFeature()
         self.requires_structured_eip712()
         self.setup_mnemonic_nopin_nopassphrase()
-        self.client.apply_policy('AdvancedMode', 1)
+        # The device-driven stream validates, displays and hashes the same
+        # bytes. It is not the blind precomputed-hash endpoint and must work
+        # with Advanced Mode disabled.
+        self.client.apply_policy('AdvancedMode', 0)
         # The report entries describe typed-data fields, not the policy prompt.
         self.client.reset_screenshots()
 
@@ -207,17 +210,13 @@ class TestMsgEip712Streaming(common.KeepKeyTest):
             self._walk(doc)
         self.assertIn('declares 2 elements', str(ctx.exception))
 
-    def test_advanced_mode_gates_the_endpoint(self):
-        """New parser surface reachable from a website stays behind the gate
-        until there is hardware evidence for it."""
+    def test_advanced_mode_is_not_required_for_structured_review(self):
+        """Exact device-driven review is available with blind signing off."""
         self.client.apply_policy('AdvancedMode', 0)
-        msg = eth.EthereumSignTypedData()
-        for n in PATH:
-            msg.address_n.append(n)
-        msg.primary_type = 'Mail'
-        resp = self.client.call_raw(msg)
-        self.assertIsInstance(resp, proto.Failure)
-        self.assertIn('AdvancedMode', resp.message)
+        resp = self._walk(SPEC_MAIL)
+        self.assertIsInstance(resp, eth.EthereumTypedDataSignature)
+        self.assertEqual(resp.domain_separator_hash.hex(), SPEC_DOMAIN_SEPARATOR)
+        self.assertEqual(resp.message_hash.hex(), SPEC_MESSAGE_HASH)
 
 
 if __name__ == '__main__':
