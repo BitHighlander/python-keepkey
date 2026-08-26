@@ -22,6 +22,26 @@ exactly on b93f95c5698328a391487ecb97a3d3f6ea74159a. Its fixture-manifest
 SHA-256 is ae9f78b4cf934d501edcddc38ca671c0e095f9c7761845dade49fa07ac92837b.
 Use this branch, rather than merging alpha/develop, for the isolated 7.14.2 PR.
 
+The reviewed fork head is
+407fff2be0771f4f1fca9aa7dcfdd6096fefe5e8. It is a two-commit linear port:
+
+1. 8b479c58adf484194595a4e1f687d595c4b547aa — hermetic fixture and test
+   implementation, whose parent is the exact release head b93f95c.
+2. 407fff2be0771f4f1fca9aa7dcfdd6096fefe5e8 — CI egress denial corrected to
+   permit only the exact local emulator container while rejecting every other
+   new non-loopback connection.
+
+Fork CI run 32951356211 is green at that exact head:
+https://github.com/BitHighlander/python-keepkey/actions/runs/32951356211
+
+- Fixture verification and Python syntax checks passed.
+- Emulator integration collected 456 tests: 322 passed, 134 skipped, and zero
+  failed. Existing firmware/version skips remain itemized in JUnit; none is an
+  explorer, RPC, network, or missing-fixture skip.
+- Both network-denial controls passed, the JUnit artifact was uploaded, and the
+  fail-closed result step passed.
+- The CI log independently printed the expected fixture-manifest SHA-256 above.
+
 The implementation is intentionally isolated from the 7.14.2 Solana/TON
 disclosure and PDF-report branches. Reconcile those branches only after this
 one is reviewed, then repin firmware to the durable Python merge commit.
@@ -78,9 +98,11 @@ the manifest from the 26 transaction fixtures that release tests actually use.
 
 ## Required upstream migration
 
-1. Port the fork commits without weakening the fail-closed behavior.
-   For 7.14.2, start from b93f95c and use fix/7142-hermetic-tests; do not merge
-   the alpha/develop report catalog into the active PDF remediation branch.
+1. Create the upstream work branch from exact b93f95c. Cherry-pick 8b479c58 and
+   407fff2b in that order, or reproduce their changes exactly after review. Do
+   not merge the alpha/develop report catalog into the active PDF remediation
+   branch, and do not weaken the fail-closed behavior while resolving later
+   branch conflicts.
 2. Preserve public live TxApi clients for non-test callers, but ensure
    authoritative tests enable offline-only mode before constructing clients.
 3. Run python tests/tx_fixture_manifest.py --check as an early CI gate.
@@ -95,6 +117,12 @@ the manifest from the 26 transaction fixtures that release tests actually use.
    cannot satisfy or influence a required release check. Store them outside
    tests/ and obtain endpoints and credentials from the workflow environment;
    never commit either value.
+8. After upstream review, rebase onto the then-current Python #219 head, rerun
+   the complete offline Python gate, merge #219, and record its durable master
+   merge commit. Repin firmware #458 to that durable commit, rerun the complete
+   firmware PR-event gate, and regenerate release evidence with the exact
+   Python SHA and fixture-manifest digest. Do not sign or tag before those
+   exact-head gates and approvals are green.
 
 ## Acceptance criteria
 
