@@ -523,6 +523,17 @@ class DebugLinkMixin(object):
             print("[SCREENSHOT] ERROR: %s" % e, file=sys.stderr)
             traceback.print_exc(file=sys.stderr)
 
+    def capture_oled(self):
+        """Capture a settled confirmation screen in a manual protocol flow.
+
+        Tests that use call_raw() need per-step control and never dispatch
+        callback_ButtonRequest(). Keeping the settle delay in this public
+        helper makes their evidence equivalent to the automatic callback path.
+        """
+        if SCREENSHOT:
+            time.sleep(SCREENSHOT_SETTLE_SECONDS)
+        self._capture_oled()
+
     def callback_ButtonRequest(self, msg):
         if self.verbose:
             log("ButtonRequest code: " + get_buttonrequest_value(msg.code))
@@ -530,11 +541,8 @@ class DebugLinkMixin(object):
         # The firmware emits ButtonRequest immediately before drawing the
         # confirmation. Allow the emulator's render transition to settle so
         # regression evidence cannot capture a partially drawn OLED.
-        if SCREENSHOT:
-            time.sleep(SCREENSHOT_SETTLE_SECONDS)
-
         # Capture OLED screenshot BEFORE pressing button (confirmation screen)
-        self._capture_oled()
+        self.capture_oled()
 
         if self.auto_button:
             if self.verbose:

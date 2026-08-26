@@ -204,6 +204,10 @@ class TestMsgEthereumSigningGuards(common.KeepKeyTest):
     def _sign_streamed(self, selector):
         """Sign the streaming-path tx with `selector`, recording its screens."""
         data = selector + self.STREAMED_TAIL
+        return self._sign_streamed_data(data)
+
+    def _sign_streamed_data(self, data):
+        """Sign exact streamed calldata and retain every approval framebuffer."""
         with _ScreenRecorder(self.client) as rec:
             sig_v, sig_r, sig_s = self.client.ethereum_sign_tx(
                 data=data, **self.STREAM_TX)
@@ -269,6 +273,35 @@ class TestMsgEthereumSigningGuards(common.KeepKeyTest):
 
         # Any clear-sign summary would be one or more EXTRA confirm screens.
         self.assertEqual(len(observed.frames), len(baseline.frames))
+
+    def test_streamed_calldata_tail_changes_user_commitment(self):
+        """Bytes arriving after the initial chunk must change what is shown.
+
+        Both transactions have identical first 1024-byte protobuf chunks and
+        identical lengths; only the final byte in EthereumTxAck differs.  The
+        pre-fix firmware displayed the same prefix/count screens for both and
+        then hashed the distinct tails invisibly.  The complete-calldata
+        Keccak-256 confirmation makes the approval sequences distinguishable.
+        """
+        self.requires_firmware("7.16.0")
+        self.requires_fullFeature()
+        self.setup_mnemonic_nopin_nopassphrase()
+        self.client.apply_policy("AdvancedMode", 1)
+
+        base_data = self.NO_HANDLER_SELECTOR + self.STREAMED_TAIL
+        changed_data = base_data[:-1] + binascii.unhexlify(
+            "%02x" % (bytearray(base_data)[-1] ^ 0x01))
+        self.assertEqual(base_data[:1024], changed_data[:1024])
+
+        baseline, _, baseline_sig = self._sign_streamed_data(base_data)
+        self._assert_signed_full_calldata(base_data, baseline_sig)
+        changed, _, changed_sig = self._sign_streamed_data(changed_data)
+        self._assert_signed_full_calldata(changed_data, changed_sig)
+
+        self.assertEqual(len(baseline.frames), len(changed.frames))
+        self.assertNotEqual(
+            baseline.layouts, changed.layouts,
+            "a streamed tail changed the signature but not the user's screens")
 
 
 if __name__ == "__main__":
