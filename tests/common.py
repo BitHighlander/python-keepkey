@@ -30,7 +30,9 @@ import semver
 from keepkeylib.client import KeepKeyClient, KeepKeyDebuglinkClient, KeepKeyDebuglinkClientVerbose
 from keepkeylib import tx_api
 
-tx_api.cache_dir = 'txcache'
+TX_FIXTURE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              'txcache')
+tx_api.configure_offline_fixtures(TX_FIXTURE_DIR)
 VERBOSE = False
 
 class KeepKeyTest(unittest.TestCase):
