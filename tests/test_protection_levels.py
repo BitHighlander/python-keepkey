@@ -130,10 +130,11 @@ class TestProtectionLevels(common.KeepKeyTest):
         with self.client:
             self.setup_mnemonic_pin_passphrase()
             self.client.clear_session()
-            self.client.set_expected_responses([proto.ButtonRequest(),
-                                      proto.PinMatrixRequest(),
+            self.client.set_expected_responses([proto.PinMatrixRequest(),
                                       proto.PassphraseRequest(),
                                       proto.ButtonRequest(),
+                                      proto.ButtonRequest(
+                                          code=proto_types.ButtonRequest_SignMessage),
                                       proto.MessageSignature()])
             self.client.sign_message('Bitcoin', [], 'testing message')
 
