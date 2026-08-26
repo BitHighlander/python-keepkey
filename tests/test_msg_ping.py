@@ -142,7 +142,13 @@ class TestPing(common.KeepKeyTest):
         # local cache. This is the precondition that made the stale-data path
         # reachable after ClearSession.
         self.client.ping('\x19wipeAuthdata:')
-        init_auth = '\x15initializeAuth:example.com:alice:JBSWY3DPEHPK3PXP'
+        # Alpha rejects TOTP seeds below the 128-bit minimum. Use a 160-bit
+        # RFC 4648 Base32 fixture so this test reaches the cancellation path
+        # it is intended to exercise.
+        init_auth = (
+            '\x15initializeAuth:example.com:alice:'
+            'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP'
+        )
         self.client.ping(init_auth)
         self.client.clear_session()
 
