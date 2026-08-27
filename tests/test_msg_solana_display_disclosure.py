@@ -58,6 +58,7 @@ class TestSolanaDisplayDisclosure(common.KeepKeyTest):
     def setUp(self):
         super(TestSolanaDisplayDisclosure, self).setUp()
         self.requires_firmware("7.14.2")
+        self.requires_fullFeature()
         self.setup_mnemonic_allallall()
 
     def _capture(self, request):
@@ -142,4 +143,3 @@ class TestSolanaDisplayDisclosure(common.KeepKeyTest):
                 raw_tx=build_memo_tx(signer, payload),
             )
         )
-
