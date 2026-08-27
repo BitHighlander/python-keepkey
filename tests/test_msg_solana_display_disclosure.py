@@ -57,7 +57,7 @@ def build_memo_tx(signer, memo):
 class TestSolanaDisplayDisclosure(common.KeepKeyTest):
     def setUp(self):
         super(TestSolanaDisplayDisclosure, self).setUp()
-        self.requires_firmware("7.14.2")
+        self.requires_firmware("7.16.0")
         self.requires_fullFeature()
         self.setup_mnemonic_allallall()
 

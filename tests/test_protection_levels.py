@@ -127,7 +127,7 @@ class TestProtectionLevels(common.KeepKeyTest):
         self.assertRaises(Exception, self.client.reset_device, False, 128, True, False, 'label', 'english')
 
     def test_sign_message(self):
-        authentication_first = self.firmware_at_least("7.14.2")
+        authentication_first = self.firmware_at_least("7.16.0")
         with self.client:
             self.setup_mnemonic_pin_passphrase()
             self.client.clear_session()
