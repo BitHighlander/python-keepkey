@@ -216,6 +216,22 @@ def ver_t(s):
     parts = (s.split('.') + ['0', '0', '0'])[:3]
     return tuple(int(''.join(ch for ch in p if ch.isdigit()) or '0') for p in parts)
 def ver_ge(a, b): return ver_t(a) >= ver_t(b)
+
+# Tests whose newer fail-closed behavior deliberately returns before drawing a
+# confirmation screen. Keep their historical catalog text, but do not schedule
+# or audit an OLED capture once the refusal behavior is active.
+_NO_SCREEN_FROM = {
+    ('test_msg_signtx_ethereum_erc20', 'test_approve_all'): '7.14.2',
+}
+
+
+def _screens_for(fw_version, mod, meth, screens):
+    floor = _NO_SCREEN_FROM.get((mod, meth))
+    if floor and ver_ge(fw_version, floor):
+        return []
+    return screens
+
+
 def _w(text, n=95):
     words, lines, cur = text.split(), [], ''
     for w in words:
@@ -1101,7 +1117,8 @@ SECTIONS = [
           ['Approval screen']),
          ('E11', 'test_msg_signtx_ethereum_erc20', 'test_approve_all',
           'ERC-20 approve unlimited',
-          'MAX_UINT256 approval. Device shows "UNLIMITED" warning since this grants infinite spending.',
+          'MAX_UINT256 approval. Older firmware showed an "UNLIMITED" warning; 7.14.2 and later '
+          'refuse it before drawing a confirmation screen.',
           ['Unlimited approval warning']),
          ('E12', 'test_msg_ethereum_makerdao', 'test_generate',
           'MakerDAO generate DAI', 'Complex DeFi contract interaction (MakerDAO CDP).', []),
@@ -2941,6 +2958,29 @@ SECTIONS = [
 
 ]
 
+# A section may span adjacent release lines even when individual native tests
+# landed later. Filter those rows before validation so a 7.14.3 report cannot
+# demand 7.15-only binaries, while 7.15 still requires the coverage.
+_TEST_MIN_VERSION = {
+    ('Storage', 'PinKdfRewrapsToActiveVersionAfterCorrectPin'): '7.15.0',
+    ('Storage', 'PinUnlocksAfterRebootUnderV17'): '7.15.0',
+    ('Storage', 'PinKdfV2FlagIsVersionedInV19'): '7.15.0',
+}
+
+
+def _active_sections(fw_version):
+    active = []
+    for letter, title, minimum, background, flow, tests in SECTIONS:
+        if not ver_ge(fw_version, minimum):
+            continue
+        filtered = [
+            test for test in tests
+            if ver_ge(fw_version,
+                      _TEST_MIN_VERSION.get((test[1], test[2]), minimum))
+        ]
+        active.append((letter, title, minimum, background, flow, filtered))
+    return active
+
 # ---------------------------------------------------------------
 # Render
 # ---------------------------------------------------------------
@@ -2972,7 +3012,7 @@ def render(output_path, fw_version, results, screenshot_dir=None):
     _build_frame_census(screenshot_dir)
     ts = datetime.now().strftime('%Y-%m-%d %H:%M')
     build_label = os.environ.get('KK_BUILD_LABEL', '').strip()
-    active = [(l,t,mf,bg,fl,tests) for l,t,mf,bg,fl,tests in SECTIONS if ver_ge(fw_version, mf)]
+    active = _active_sections(fw_version)
     # Separate specs section (no tests) from test sections
     specs = [s for s in active if not s[5]]
 
@@ -3082,6 +3122,7 @@ def render(output_path, fw_version, results, screenshot_dir=None):
             pb.text(9, f'Tests: {len(tests)}', bold=True)
         pb.gap(2)
         for tid, mod, meth, title, ctx, scr in tests:
+            scr = _screens_for(fw_version, mod, meth, scr)
             pb.need(50)
             r = _lookup(results, mod, meth)
             pb.check(9, f'{tid} {meth}', r)
@@ -3193,14 +3234,25 @@ def screenshot_filter(fw_version):
     The shell script calls this instead of maintaining a hardcoded filter.
     Adding screenshots to a test in SECTIONS automatically includes it in CI Phase 1.
     """
-    active = [(l,t,mf,bg,fl,tests) for l,t,mf,bg,fl,tests in SECTIONS if ver_ge(fw_version, mf)]
+    active = _active_sections(fw_version)
     terms = []
     for letter, title, mf, bg, fl, tests in active:
         for tid, mod, meth, ttl, ctx, scr in tests:
-            if scr:  # non-empty screenshot list = needs OLED capture
+            if _screens_for(fw_version, mod, meth, scr):
                 # Use (method and module) for unambiguous pytest -k matching
                 terms.append(f'({meth} and {mod})')
     return ' or '.join(terms)
+
+
+def screenshot_test_list(fw_version):
+    """Return exact module::method selectors consumed by conftest.py."""
+    active = _active_sections(fw_version)
+    pairs = set()
+    for _letter, _title, _mf, _bg, _fl, tests in active:
+        for _tid, mod, meth, _ttl, _ctx, screens in tests:
+            if _screens_for(fw_version, mod, meth, screens):
+                pairs.add('%s::%s' % (mod, meth))
+    return '\n'.join(sorted(pairs))
 
 
 # Modules whose tests must actually RUN once the firmware is new enough to be
@@ -3250,11 +3302,11 @@ def screenshot_audit(fw_version, screenshot_root, junit_path=None):
                     mod = next((p for p in cn.split('.') if p.startswith('test_')), '')
                     skipped.add((mod, tc.get('name')))
 
-    active = [x for x in SECTIONS if ver_ge(fw_version, x[2])]
+    active = _active_sections(fw_version)
     missing = []
     for letter, title, mf, bg, fl, tests in active:
         for tid, mod, meth, ttl, ctx, scr in tests:
-            if not scr:
+            if not _screens_for(fw_version, mod, meth, scr):
                 continue
             if (mod, meth) in skipped:
                 continue
@@ -3273,7 +3325,7 @@ def validate_junit(fw_version, results):
     Tests that were skipped (gated by requires_message/requires_firmware) are OK,
     unless their module is in MUST_RUN_MODULES.
     """
-    active = [(l,t,mf,bg,fl,tests) for l,t,mf,bg,fl,tests in SECTIONS if ver_ge(fw_version, mf)]
+    active = _active_sections(fw_version)
     failures = []
     for letter, title, mf, bg, fl, tests in active:
         for tid, mod, meth, ttl, ctx, scr in tests:
@@ -3299,8 +3351,20 @@ def main():
                    help='JUnit XML for --screenshot-audit, so skipped tests are not counted missing')
     p.add_argument('--screenshot-filter', action='store_true',
                    help='Print pytest -k expression for tests needing screenshots, then exit')
+    p.add_argument('--screenshot-test-list', action='store_true',
+                   help='Print exact module::method screenshot selectors, then exit')
     p.add_argument('--validate-junit', action='store_true',
                    help='Validate JUnit results against SECTIONS, exit non-zero on failures')
+    p.add_argument('--firmware-sha', default=None,
+                   help='Exact firmware commit represented by this report')
+    p.add_argument('--python-sha', default=None,
+                   help='Exact python-keepkey commit represented by this report')
+    p.add_argument('--run-url', default=None,
+                   help='Exact CI run that produced the evidence')
+    p.add_argument('--generator-sha256', default=None,
+                   help='Combined wrapper/renderer digest')
+    p.add_argument('--arm-manifest-sha256', default=None,
+                   help='Digest binding the complete ARM manifest set')
     args = p.parse_args()
 
     fw = args.fw_version
@@ -3322,6 +3386,9 @@ def main():
     if args.screenshot_filter:
         print(screenshot_filter(fw))
         sys.exit(0)
+    if args.screenshot_test_list:
+        print(screenshot_test_list(fw))
+        sys.exit(0)
 
     if args.validate_junit:
         if not args.junit:
@@ -3337,6 +3404,17 @@ def main():
             for tid, mod, meth, status in failures:
                 print(f'  {tid} {mod}::{meth} -> {status}')
             sys.exit(1)
+
+    provenance = [
+        ('firmware', args.firmware_sha),
+        ('python', args.python_sha),
+        ('run', args.run_url),
+        ('generator', args.generator_sha256),
+        ('arm-manifests', args.arm_manifest_sha256),
+    ]
+    supplied = ['%s=%s' % item for item in provenance if item[1]]
+    if supplied:
+        os.environ['KK_BUILD_LABEL'] = ' | '.join(supplied)
 
     results = parse_junit(args.junit) if args.junit else {}
     render(args.output, fw, results, args.screenshots)
