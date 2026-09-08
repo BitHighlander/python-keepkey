@@ -56,6 +56,8 @@ def generate_entropy(strength, internal_entropy, external_entropy):
     return entropy_stripped
 
 class TestDeviceReset(common.KeepKeyTest):
+    POST_RC18_SETUP_FIRMWARE = "7.16.0"
+
     def test_reset_device(self):
         # No PIN, no passphrase
         external_entropy = b'zlutoucky kun upel divoke ody' * 2
@@ -85,6 +87,10 @@ class TestDeviceReset(common.KeepKeyTest):
         mnemonic = []
         while isinstance(resp, proto.ButtonRequest):
             mnemonic.append(self.client.debug.read_reset_word())
+            if len(mnemonic) == 1:
+                # Manual call_raw() flow: bind the report evidence to a word
+                # the DebugLink confirms is currently on the device.
+                self.client.capture_oled()
             self.client.debug.press_yes()
             resp = self.client.call_raw(proto.ButtonAck())
 
@@ -112,7 +118,9 @@ class TestDeviceReset(common.KeepKeyTest):
         self.assertIsInstance(resp, proto.Success)
 
     def test_reset_device_dice(self):
-        self.requires_firmware("7.15.0")
+        # On-device dice entry landed after the RC18 candidate. RC18 accepts
+        # the forward-compatible field but follows the ordinary entropy flow.
+        self.requires_firmware(self.POST_RC18_SETUP_FIRMWARE)
 
         external_entropy = b'zlutoucky kun upel divoke ody' * 2
         strength = 256  # 99 rolls
@@ -128,6 +136,7 @@ class TestDeviceReset(common.KeepKeyTest):
         # Device announces the on-device dice entry screen
         self.assertIsInstance(ret, proto.ButtonRequest)
         self.assertEqual(ret.code, proto_types.ButtonRequest_DiceRoll)
+        self.client.capture_oled()
 
         # Ack without blocking on the reply: the device only leaves the dice
         # screen once the rolls are complete, and input is ignored until the
@@ -165,6 +174,7 @@ class TestDeviceReset(common.KeepKeyTest):
         dice_digest = self.client.debug.read_dice_digest()
         self.assertEqual(dice_digest,
                          hashlib.sha256(expected.encode('ascii')).digest())
+        self.client.capture_oled()
 
         self.client.debug.press_yes()
         ret = self.client.call_raw(proto.ButtonAck())
@@ -200,7 +210,8 @@ class TestDeviceReset(common.KeepKeyTest):
         int_entropy, so a following EntropyAck derived the seed from
         sha256(0*32 || host_bytes) -- entirely host-chosen.
 
-        7.15 closes it EARLIER and more strongly than the original fix did.
+        The post-RC18 setup hardening closes it EARLIER and more strongly than
+        the original fix did.
         #429 replaced the separate awaiting_entropy flag with a single armed
         (kind) ceremony, and setup_stage() now REFUSES to open a second
         ceremony on top of an armed one. So the re-entry this test used to
@@ -208,7 +219,8 @@ class TestDeviceReset(common.KeepKeyTest):
         disarmed -- there is no second ceremony to leave armed. Both halves are
         asserted below: the refusal, and then the original property.
         """
-        self.requires_firmware("7.15.0")
+        # The single armed-ceremony guard is the post-RC18 #429 behavior.
+        self.requires_firmware(self.POST_RC18_SETUP_FIRMWARE)
         self.client.wipe_device()
 
         # Arm a reset and walk away without acking the entropy request.
@@ -258,8 +270,9 @@ class TestDeviceReset(common.KeepKeyTest):
                                                label='test'))
 
         # display_random=True above is deliberate: the field stays in the wire
-        # schema for host compatibility. Firmware 7.15.0 (fw 320f0eb5, "no
-        # entropy display") stopped honouring it -- internal entropy is seed
+        # schema for host compatibility. The post-RC18 setup hardening (fw
+        # 320f0eb5, "no entropy display"), first shipped on 7.16, stopped
+        # honouring it -- internal entropy is seed
         # pre-image material, and a host that sets the flag and reads that
         # screen once can compute SHA256(shown || ext) and derive the seed.
         #
@@ -267,8 +280,8 @@ class TestDeviceReset(common.KeepKeyTest):
         # (PIN entry, EntropyRequest/Ack, mnemonic derivation) is version-
         # independent and must keep running on older firmware.
         f = self.client.features
-        if (f.major_version, f.minor_version, f.patch_version) < (7, 15, 0):
-            # Pre-7.15: the Internal Entropy screen legitimately still exists.
+        if (f.major_version, f.minor_version, f.patch_version) < (7, 16, 0):
+            # RC18 and older: the Internal Entropy screen still exists.
             self.assertIsInstance(ret, proto.ButtonRequest)
             self.client.debug.press_yes()
             ret = self.client.call_raw(proto.ButtonAck())
@@ -342,8 +355,9 @@ class TestDeviceReset(common.KeepKeyTest):
                                                label='test'))
 
         # display_random=True above is deliberate: the field stays in the wire
-        # schema for host compatibility. Firmware 7.15.0 (fw 320f0eb5, "no
-        # entropy display") stopped honouring it -- internal entropy is seed
+        # schema for host compatibility. The post-RC18 setup hardening (fw
+        # 320f0eb5, "no entropy display"), first shipped on 7.16, stopped
+        # honouring it -- internal entropy is seed
         # pre-image material, and a host that sets the flag and reads that
         # screen once can compute SHA256(shown || ext) and derive the seed.
         #
@@ -351,8 +365,8 @@ class TestDeviceReset(common.KeepKeyTest):
         # (PIN entry, EntropyRequest/Ack, mnemonic derivation) is version-
         # independent and must keep running on older firmware.
         f = self.client.features
-        if (f.major_version, f.minor_version, f.patch_version) < (7, 15, 0):
-            # Pre-7.15: the Internal Entropy screen legitimately still exists.
+        if (f.major_version, f.minor_version, f.patch_version) < (7, 16, 0):
+            # RC18 and older: the Internal Entropy screen still exists.
             self.assertIsInstance(ret, proto.ButtonRequest)
             self.client.debug.press_yes()
             ret = self.client.call_raw(proto.ButtonAck())

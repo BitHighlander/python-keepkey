@@ -9,7 +9,9 @@ from ecdsa import VerifyingKey, SECP256k1
 from ecdsa.util import sigdecode_string
 
 import keepkeylib.messages_pb2 as proto
+import keepkeylib.messages_mayachain_pb2 as mayachain_proto
 import keepkeylib.types_pb2 as proto_types
+from keepkeylib.client import CallException
 from keepkeylib.tools import parse_path
 from keepkeylib.signed_metadata import eth_sighash_legacy, keccak256
 
@@ -53,6 +55,30 @@ def recover_eth_signer(sig_r, sig_s, sig_v, digest, chain_id):
 
 
 class TestMsgMayaChainSignTx(common.KeepKeyTest):
+
+    def test_ack_rejects_send_and_deposit_together(self):
+        """An unused deposit submessage must not suppress the signed tx memo."""
+        # The exactly-one-message check was added after RC18 as part of the
+        # 7.16 alpha security backport (firmware 71e6c1d942).
+        self.requires_firmware("7.16.0")
+        self.requires_fullFeature()
+        self.setup_mnemonic_nopin_nopassphrase()
+
+        response = self.client.call(mayachain_proto.MayachainSignTx(
+            address_n=parse_path(DEFAULT_BIP32_PATH), account_number=92,
+            chain_id="mayachain", fee_amount=3000, gas=200000,
+            memo="SWAP:BTC.BTC:bc1qreviewthismemo", sequence=3,
+            msg_count=1, testnet=False))
+        self.assertIsInstance(response, mayachain_proto.MayachainMsgRequest)
+
+        with self.assertRaises(CallException):
+            self.client.call(mayachain_proto.MayachainMsgAck(
+                send=mayachain_proto.MayachainMsgSend(
+                    to_address="maya1jvt443rvhq5h8yrna55yjysvhtju0el7mdujp3",
+                    amount=10000, denom="cacao"),
+                deposit=mayachain_proto.MayachainMsgDeposit(
+                    asset="MAYA.CACAO", amount=1, memo="unused",
+                    signer="maya1ls33ayg26kmltw7jjy55p32ghjna09zp7z4etj")))
 
     def _maya_send_digest(self, account_number, chain_id, fee, gas, memo,
                           amount, from_address, to_address, sequence):
@@ -205,7 +231,7 @@ class TestMsgMayaChainSignTx(common.KeepKeyTest):
             '0000000000000000000000000000000000000000000000000000000000000000' +
             '0000000000000000000000000000000000000000000000000000000000000000' +
             '0000000000000000000000000000000000000000000000000000000000000080' +  # offset of memo string from 4
-            '000000000000000000000000000000000000000000000000000000000000003a' +  # length of memo string in bytes (58, not 59: the 59th byte is ABI padding)
+            '000000000000000000000000000000000000000000000000000000000000003a' +  # length of memo string in bytes (58: ADD:ETH.ETH:<addr>:420; the 59th byte the old 0x3b counted was ABI padding)
             # ADD:ETH.ETH:0xc5b2608927ea95ed43f842f553e3a27b09c050e8:420
             '4144443a4554482e4554483a3078633562323630383932376561393565643433' +
             '663834326635353365336132376230396330353065383a343230000000000000')
@@ -240,6 +266,7 @@ class TestMsgMayaChainSignTx(common.KeepKeyTest):
         signs, and each signature is bound to its exact memo bytes — a memo
         substitution changes the sign-doc digest and fails verification."""
         self.requires_firmware("7.9.1")
+        self.requires_fullFeature()
         self.setup_mnemonic_nopin_nopassphrase()
 
         memos = [

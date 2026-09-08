@@ -356,56 +356,82 @@ class TestMsgSolanaSignTx(common.KeepKeyTest):
 
     def test_solana_sign_stake_authorize_clearsigns(self):
         """StakeAuthorize clear-signs, showing the role (staker/withdrawer) and
-        the new authority."""
+        the new authority. Canonical account layout: [0]=stake account,
+        [1]=Clock sysvar, [2]=[SIGNER] current authority -- the Clock sysvar
+        must be present so the signer lands at the real index 2, not 1."""
         self.requires_fullFeature()
         self.setup_mnemonic_allallall()
         from_pubkey = self._get_from_pubkey()
+        clock_sysvar = b'\xC1' * 32
         current_auth = b'\x77' * 32
         new_auth = b'\x88' * 32
         # Authorize (type=1 LE u32) + new authority(32) + StakeAuthorize role (0=staker)
         instr_data = struct.pack('<I', 1) + new_auth + struct.pack('<I', 0)
-        raw_tx = self._build_tx(from_pubkey, [current_auth], self.STAKE_PROGRAM, instr_data)
-        resp = self.client.call(messages.SolanaSignTx(
-            address_n=parse_path("m/44'/501'/0'/0'"), raw_tx=raw_tx))
-        self.assertEqual(len(resp.signature), 64)
-
-    def test_solana_sign_stake_delegate(self):
-        """Stake delegate — OLED shows 'Delegate stake?'."""
-        self.requires_fullFeature()
-        self.setup_mnemonic_allallall()
-        from_pubkey = self._get_from_pubkey()
-        stake_account = b'\x55' * 32
-        vote_account = b'\x66' * 32
-        # Stake Delegate: type=2 (LE u32)
-        instr_data = struct.pack('<I', 2)
-        raw_tx = self._build_tx(from_pubkey, [stake_account, vote_account],
+        raw_tx = self._build_tx(from_pubkey, [clock_sysvar, current_auth],
                                 self.STAKE_PROGRAM, instr_data)
         resp = self.client.call(messages.SolanaSignTx(
             address_n=parse_path("m/44'/501'/0'/0'"), raw_tx=raw_tx))
         self.assertEqual(len(resp.signature), 64)
 
-    def test_solana_sign_stake_withdraw(self):
-        """Stake withdraw — OLED shows 'Withdraw [amount] from stake?'."""
+    def test_solana_sign_stake_delegate(self):
+        """Stake delegate — OLED shows 'Delegate stake?'. Canonical account
+        layout: [0]=stake account, [1]=vote account, [2]=Clock sysvar,
+        [3]=StakeHistory sysvar, [4]=stake config account, [5]=[SIGNER] stake
+        authority."""
         self.requires_fullFeature()
         self.setup_mnemonic_allallall()
         from_pubkey = self._get_from_pubkey()
-        stake_account = b'\x55' * 32
+        vote_account = b'\x66' * 32
+        clock_sysvar = b'\xC1' * 32
+        stake_history_sysvar = b'\xC2' * 32
+        stake_config = b'\xC3' * 32
+        authority = b'\x99' * 32
+        # Stake Delegate: type=2 (LE u32)
+        instr_data = struct.pack('<I', 2)
+        raw_tx = self._build_tx(
+            from_pubkey,
+            [vote_account, clock_sysvar, stake_history_sysvar, stake_config,
+             authority],
+            self.STAKE_PROGRAM, instr_data)
+        resp = self.client.call(messages.SolanaSignTx(
+            address_n=parse_path("m/44'/501'/0'/0'"), raw_tx=raw_tx))
+        self.assertEqual(len(resp.signature), 64)
+
+    def test_solana_sign_stake_withdraw(self):
+        """Stake withdraw — OLED shows 'Withdraw [amount] from stake?'.
+        Canonical account layout: [0]=stake account, [1]=recipient,
+        [2]=Clock sysvar, [3]=StakeHistory sysvar, [4]=[SIGNER] withdraw
+        authority."""
+        self.requires_fullFeature()
+        self.setup_mnemonic_allallall()
+        from_pubkey = self._get_from_pubkey()
+        recipient = b'\x55' * 32
+        clock_sysvar = b'\xC1' * 32
+        stake_history_sysvar = b'\xC2' * 32
+        authority = b'\x99' * 32
         # Stake Withdraw: type=4 (LE u32) + lamports (LE u64)
         instr_data = struct.pack('<I', 4) + struct.pack('<Q', 2000000000)  # 2 SOL
-        raw_tx = self._build_tx(from_pubkey, [stake_account], self.STAKE_PROGRAM, instr_data)
+        raw_tx = self._build_tx(
+            from_pubkey,
+            [recipient, clock_sysvar, stake_history_sysvar, authority],
+            self.STAKE_PROGRAM, instr_data)
         resp = self.client.call(messages.SolanaSignTx(
             address_n=parse_path("m/44'/501'/0'/0'"), raw_tx=raw_tx))
         self.assertEqual(len(resp.signature), 64)
 
     def test_solana_sign_stake_deactivate(self):
-        """Stake deactivate — OLED shows 'Deactivate stake?'."""
+        """Stake deactivate — OLED shows 'Deactivate stake?'. Canonical
+        account layout: [0]=stake account, [1]=Clock sysvar, [2]=[SIGNER]
+        stake authority."""
         self.requires_fullFeature()
         self.setup_mnemonic_allallall()
         from_pubkey = self._get_from_pubkey()
-        stake_account = b'\x55' * 32
+        clock_sysvar = b'\xC1' * 32
+        authority = b'\x99' * 32
         # Stake Deactivate: type=5 (LE u32)
         instr_data = struct.pack('<I', 5)
-        raw_tx = self._build_tx(from_pubkey, [stake_account], self.STAKE_PROGRAM, instr_data)
+        raw_tx = self._build_tx(from_pubkey, [clock_sysvar, authority],
+                                self.STAKE_PROGRAM, instr_data)
         resp = self.client.call(messages.SolanaSignTx(
             address_n=parse_path("m/44'/501'/0'/0'"), raw_tx=raw_tx))
         self.assertEqual(len(resp.signature), 64)
@@ -892,6 +918,55 @@ class TestMsgSolanaSignTx(common.KeepKeyTest):
         ))
         self.assertEqual(len(resp.signature), 64)
         self.assertFalse(all(b == 0 for b in resp.signature))
+
+    def test_relay_certified_v0_no_lookup_proof_reaches_signer_check(self):
+        """The exact public Relay proof used by Vault must enter ClearSign.
+
+        The captured transaction belongs to the operator, not this test's
+        mnemonic, so the final signer check must reject it.  That later,
+        specific rejection is intentional: it proves the certificate and
+        schema survived protobuf decoding and passed the production FSM proof
+        gate without requiring an operator secret or approving a transaction.
+        """
+        self.requires_firmware("7.16.0")
+        self.requires_fullFeature()
+        self.setup_mnemonic_allallall()
+
+        raw_tx = binascii.unhexlify(
+            "8001000305ec3979a4dc6b401bd045171a189f26856fab9eab75560214f972b2"
+            "edc164300f66963b37e581dc14a0f573eeede8e54a257d83d082c54ab208cbff"
+            "d1dc2a70ca792689378ecd51d80406eb0caa3b62795beb10b6c5dc96bc2e0df0"
+            "3cbfee1abfbe3e6d285d2ee963351b6deeb0a1e96c881435ccd450b2645f24cc"
+            "27960bee47000000000000000000000000000000000000000000000000000000"
+            "0000000000d96db9f622f840ffda97430208ddbc7950d2c1ea45ecc9c2933151"
+            "c02963f3860102050300000104300d9e0ddf5fd51c06f075633b000000000370"
+            "4dea2a5eb9cf98e2f625a96080df1f0c5c24ccec3a6d8827b3ab25c0b11800")
+        schema_payload = binascii.unhexlify(
+            "4b4b534f4c53433101792689378ecd51d80406eb0caa3b62795beb10b6c5dc96"
+            "bc2e0df03cbfee1abf080d9e0ddf5fd51c060c52656c6179204272696467650d"
+            "6465706f7369744e6174697665020506416d6f756e7404054f72646572010305"
+            "5661756c74")
+        schema_signature = binascii.unhexlify(
+            "801b309d284ae89287a21a6acbd5c63f999515f3ff6bf71d72a256485321b892"
+            "7b7ebc3a26ace3df5551b85a68df8e9f1ef8eac220d85f4bfaa33d43b5349061")
+        certificate = binascii.unhexlify(
+            "0101000001f56c68c8804b6565704b6579205661756c74000000000000000000"
+            "000000000000000000000342f5f9704494b3f9bd72295eecaf29d783d23ea02"
+            "b2dc9f48abcd2e46d4850cfa2753fac6068a45747a32a4a39f249af72b55370f"
+            "3491913b7fb9a80207d619b3b4fca6750fc1fdc790da5562b42a351e12cde3c"
+            "0f084056a24ca8d1bf2c36b5")
+
+        self.client.apply_policy('AdvancedMode', False)
+        with pytest.raises(CallException) as exc:
+            self.client.call(messages.SolanaSignTx(
+                address_n=parse_path("m/44'/501'/0'/0'"),
+                raw_tx=raw_tx,
+                schema_payload=schema_payload,
+                schema_signature=schema_signature,
+                schema_signer_key_id=128,
+                clearsign_certificate=certificate,
+            ))
+        self.assertIn("Derived key is not a signer for this tx", str(exc.value))
 
     def test_solana_sign_x402_zero_lut_usdc_payment(self):
         """Official x402 SVM shape clear-signs without blind signing.

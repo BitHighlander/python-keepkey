@@ -523,6 +523,17 @@ class DebugLinkMixin(object):
             print("[SCREENSHOT] ERROR: %s" % e, file=sys.stderr)
             traceback.print_exc(file=sys.stderr)
 
+    def capture_oled(self):
+        """Capture a settled confirmation screen in a manual protocol flow.
+
+        Tests that use call_raw() need per-step control and never dispatch
+        callback_ButtonRequest(). Keeping the settle delay in this public
+        helper makes their evidence equivalent to the automatic callback path.
+        """
+        if SCREENSHOT:
+            time.sleep(SCREENSHOT_SETTLE_SECONDS)
+        self._capture_oled()
+
     def callback_ButtonRequest(self, msg):
         if self.verbose:
             log("ButtonRequest code: " + get_buttonrequest_value(msg.code))
@@ -530,11 +541,8 @@ class DebugLinkMixin(object):
         # The firmware emits ButtonRequest immediately before drawing the
         # confirmation. Allow the emulator's render transition to settle so
         # regression evidence cannot capture a partially drawn OLED.
-        if SCREENSHOT:
-            time.sleep(SCREENSHOT_SETTLE_SECONDS)
-
         # Capture OLED screenshot BEFORE pressing button (confirmation screen)
-        self._capture_oled()
+        self.capture_oled()
 
         if self.auto_button:
             if self.verbose:
@@ -1054,15 +1062,33 @@ class ProtocolMixin(object):
                 # OsmosisMsgSend.amount, which is a string field and would have
                 # raised even for uatom.
                 #
-                # The legacy Amino MsgSend serializer is uosmo-only. Firmware
-                # now enforces the same rule on direct OsmosisMsgAck traffic;
-                # retain the host check as early feedback, never as the trust
-                # boundary.
+                # Version-gated exactly like thorchain_sign_tx above, and for
+                # the same reason.
+                #
+                # Firmware does not reject a non-uosmo denom on the
+                # OsmosisMsgAck path. Since 7.14.2 (firmware c9dccf68)
+                # osmosis_signTxUpdateMsgSend escapes the host-supplied denom
+                # straight into the signed Amino document -- which is what
+                # test_osmosis_send_denom_is_committed_to_the_signature proves
+                # over the raw wire -- and the only strcmp against "uosmo" left
+                # in firmware picks the display exponent.
+                #
+                # BEFORE 7.14.2 the serializer hardcoded "uosmo": it would
+                # ignore the denom sent here and sign a uosmo transfer the
+                # caller never asked for. So fail closed there, and expose the
+                # field on firmware that actually commits it. An unconditional
+                # rejection made the supported IBC and factory-denom cases
+                # unreachable through this helper.
                 coin = msg['value']['amount'][0]
-                if coin['denom'] != 'uosmo':
+                firmware_version = (
+                    self.features.major_version,
+                    self.features.minor_version,
+                    self.features.patch_version,
+                )
+                if coin['denom'] != 'uosmo' and firmware_version < (7, 14, 2):
                     raise CallException(
                         "Osmosis.MsgSend",
-                        "Only uosmo is signable by Osmosis MsgSend (got %s)" %
+                        "Unsupported denomination before firmware 7.14.2: %s" %
                         coin['denom'])
                 resp = self.call(osmosis_proto.OsmosisMsgAck(
                     send=osmosis_proto.OsmosisMsgSend(
@@ -1204,16 +1230,36 @@ class ProtocolMixin(object):
                     raise CallException("Thorchain.MsgSend", "Multiple amounts per send msg not supported")
 
                 denom = msg['value']['amount'][0]['denom']
-                if denom != 'rune':
-                    raise CallException("Thorchain.MsgSend", "Unsupported denomination: " + denom)
+                firmware_version = (
+                    self.features.major_version,
+                    self.features.minor_version,
+                    self.features.patch_version,
+                )
+                supports_denom = firmware_version >= (7, 15, 0)
+
+                # Older firmware hardcodes "rune" in its amino sign-doc and
+                # nanopb skips the unknown denom field. Sending a non-RUNE denom
+                # there would therefore make the host and device disagree about
+                # what was signed. Preserve the fail-closed legacy behaviour,
+                # while exposing the protocol field on firmware that validates,
+                # displays and commits it to the signature.
+                if denom != 'rune' and not supports_denom:
+                    raise CallException(
+                        "Thorchain.MsgSend",
+                        "Unsupported denomination before firmware 7.15.0: " + denom,
+                    )
+
+                send = thorchain_proto.ThorchainMsgSend(
+                    from_address=msg['value']['from_address'],
+                    to_address=msg['value']['to_address'],
+                    amount=int(msg['value']['amount'][0]['amount']),
+                    address_type=types.SPEND,
+                )
+                if supports_denom:
+                    send.denom = denom
 
                 resp = self.call(thorchain_proto.ThorchainMsgAck(
-                    send=thorchain_proto.ThorchainMsgSend(
-                        from_address=msg['value']['from_address'],
-                        to_address=msg['value']['to_address'],
-                        amount=int(msg['value']['amount'][0]['amount']),
-                        address_type=types.SPEND,
-                    )
+                    send=send
                 ))
 
             elif msg['type'] == "thorchain/MsgDeposit":
@@ -1868,7 +1914,7 @@ class ProtocolMixin(object):
 
     # ── Zcash Address Display ─────────────────────────────────
     @expect(zcash_proto.ZcashAddress)
-    def zcash_display_address(self, address_n, account=None,
+    def zcash_display_address(self, address_n=None, account=None,
                               expected_seed_fingerprint=None):
         """Display a Zcash unified address on the device for user confirmation.
 
@@ -1878,7 +1924,9 @@ class ProtocolMixin(object):
         are reserved on ZcashDisplayAddress).
 
         Args:
-            address_n: ZIP-32 derivation path [32', 133', account']
+            address_n: ZIP-32 derivation path [32', 133', account'].
+                Optional -- messages-zcash.proto marks it "required if account
+                omitted", so either form is valid and exactly one is needed.
             account: account index (alternative to full path)
             expected_seed_fingerprint: optional 32-byte ZIP-32 §6.1 seed
                 fingerprint. If provided, device verifies the match before
@@ -1888,7 +1936,16 @@ class ProtocolMixin(object):
             ZcashAddress with .address and .seed_fingerprint of the
             attesting device.
         """
-        kwargs = dict(address_n=address_n)
+        # The protocol accepts EITHER form. Sending address_n unconditionally
+        # made the documented account-only call impossible: it failed in Python
+        # before a request was built.
+        if address_n is None and account is None:
+            raise ValueError(
+                "zcash_display_address needs address_n or account "
+                "(messages-zcash.proto: each is required if the other is omitted)")
+        kwargs = {}
+        if address_n is not None:
+            kwargs['address_n'] = address_n
         if account is not None:
             kwargs['account'] = account
         if expected_seed_fingerprint is not None:
@@ -2093,6 +2150,23 @@ class ProtocolMixin(object):
 
         if not isinstance(resp, zcash_proto.ZcashSignedPCZT):
             raise Exception("Unexpected response type: %s" % type(resp))
+
+        # Count the transparent signatures the same way the Orchard signatures
+        # are counted below. Without this, a device that skips
+        # ZcashTransparentSigned entirely, or returns a short list, reaches the
+        # caller as success and hands back a transaction whose transparent
+        # inputs can never be spent. Checked after the Failure and response-type
+        # arms above so a device-reported error still surfaces its own message.
+        if len(transparent_sigs) != len(transparent_inputs):
+            raise Exception(
+                "Device returned %d transparent signatures for %d transparent inputs"
+                % (len(transparent_sigs), len(transparent_inputs)))
+        # Transparent signatures are DER ECDSA, so their length is not fixed the
+        # way a 64-byte RedPallas signature is; an empty entry is still a missing
+        # signature dressed up as a present one.
+        for signature in transparent_sigs:
+            if not signature:
+                raise Exception("Device returned an empty transparent signature")
 
         expected_signatures = sum(1 for action in actions if action['is_spend'])
         if len(resp.signatures) != expected_signatures:

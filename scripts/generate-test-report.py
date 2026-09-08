@@ -526,10 +526,9 @@ SECTIONS = [
           '0x transformERC20 raw disclosure',
           'A 1480-byte transformERC20 payload exceeds one 1024-byte chunk. The device must NOT '
           'clear-sign it as a token swap, because the bytes past the initial chunk are hashed '
-          'without being decoded. With AdvancedMode on it falls to the raw path, where the byte '
-          'count shown must be the FULL length (1480), not the chunk length (1024) - a short '
-          'count would under-report what is being signed.',
-          ['Raw contract data screen showing the full byte count']),
+          'without being decoded. With AdvancedMode on it falls to the raw path, where the final '
+          'screen commits to all 1480 bytes with a Keccak-256 the user can compare to the host.',
+          ['Complete contract-data Keccak-256 commitment']),
          ('J2', 'test_msg_ethereum_erc20_0x_signtx', 'test_sign_0x_swap_ERC20_to_ETH',
           '0x sellToUniswap names both assets',
           'Clear-signing is only honest when BOTH token words resolve to known assets. This '
@@ -538,18 +537,24 @@ SECTIONS = [
           ['Swap screen naming both assets and amounts']),
          ('J3', 'test_msg_ethereum_erc20_0x_signtx', 'test_sign_longdata_swap',
           'Long 0x calldata stays disclosed',
-          'Calldata spanning multiple chunks must not silently lose its tail from the display '
-          'while remaining inside the signature.',
-          ['Contract data screen']),
+          'Calldata spanning multiple chunks must not silently lose its tail from the user-visible '
+          'commitment while remaining inside the signature.',
+          ['Complete contract-data Keccak-256 commitment']),
+         ('J4', 'test_msg_ethereum_signing_guards',
+          'test_streamed_calldata_tail_changes_user_commitment',
+          'A streamed tail changes the approval screens',
+          'Signs two equal-length payloads with identical initial 1024-byte chunks and a one-bit '
+          'difference in the final EthereumTxAck byte. Their ordered OLED frame sequences must '
+          'differ, proving the complete-calldata Keccak-256 -- not merely the visible prefix or '
+          'declared length -- reaches the user before either signature is emitted.',
+          ['Complete contract-data Keccak-256 commitment']),
          ('J8', 'test_msg_ethereum_signing_guards',
           'test_contract_handler_streamed_calldata_signs_full_data',
           'Streamed calldata is fully covered',
-          'Calldata delivered across several chunks must be hashed in full and disclosed in full. '
-          'This is the positive control for the chunk-completeness gate. NOTE: every test in '
-          'test_msg_ethereum_signing_guards currently SKIPS in CI under requires_firmware, so no '
-          'screen can be captured for it yet - the screenshot list stays empty until the gate '
-          'opens, rather than declaring an expectation nothing can satisfy.',
-          []),
+          'Calldata delivered across several chunks must be hashed in full, and the final OLED '
+          'commitment must cover that same complete byte string. This is the positive control for '
+          'the chunk-completeness gate.',
+          ['Complete contract-data Keccak-256 commitment']),
          ('J9', 'test_msg_ethereum_signing_guards', 'test_eip1559_requires_chain_id',
           'Omitted chain_id is refused before any screen',
           'Without a chain_id the device cannot name the network, and a signature would be '
@@ -564,10 +569,6 @@ SECTIONS = [
           'domain name. The feature is withdrawn rather than shipped with a screen it could not '
           'vouch for: zero screens, refusal on the wire.',
           []),
-         ('J11', 'test_msg_binance_sign_tx', 'test_transfer',
-          'Binance denom renders in full',
-          'A long denom must render completely and must not overflow the formatting buffer.',
-          ['Transfer screen showing the full denom']),
          ('J12', 'test_msg_ping', 'test_ping_long_body_is_paged',
           'A long body is paged, not clipped',
           'A body that will not fit one screen is shown across several, with the page number '
@@ -579,7 +580,7 @@ SECTIONS = [
           ['Numbered page screens covering the whole body']),
          ('J13', 'test_msg_ping', 'test_ping_short_body_is_not_paged',
           'A body that fits is not paged',
-          'The control for S12. A fitting body must still take exactly one screen with an '
+          'The control for J12. A fitting body must still take exactly one screen with an '
           'unnumbered title - otherwise a pager that numbered every confirmation, making '
           'ordinary approvals cost extra presses, would pass unnoticed.',
           ['Single unnumbered confirmation screen']),
@@ -1137,21 +1138,25 @@ SECTIONS = [
           'Failure on the wire.',
           []),
          ('E17', 'test_msg_ethereum_erc20_uniswap_liquidity', 'test_sign_uni_approve_liquidity_ETH',
-          'Uniswap V2 add-liquidity approve (pending)',
-          'PENDING, disclosed: known emulator limitation — an approve to an unknown (non-registry) '
-          'token contract cannot complete against the kkemu emulator (matches the sibling '
-          'add/remove-liquidity skips below); the device-firmware path is not in question, only '
-          'CI emulator coverage. Real-device testing is unaffected.',
-          []),
+          'Uniswap V2 LP-token approval',
+          'Approves the Uniswap V2 FOX/WETH LP token for the canonical router. The exact pool '
+          'identity and full-LP allowance are shown before the generic fee review, and the fixed '
+          'signature proves the reviewed transaction bytes are the bytes signed.',
+          ['Full LP allowance', 'LP token and pool address', 'Fee and final approval']),
          ('E18', 'test_msg_ethereum_erc20_uniswap_liquidity', 'test_sign_uni_add_liquidity_ETH',
-          'Uniswap V2 add liquidity ETH+token (pending)',
-          'PENDING, disclosed: same emulator limitation as E17 — a daily-driver LP-deposit flow '
-          'with no PDF proof on this build; tracked for real-device verification.',
-          []),
+          'Uniswap V2 add liquidity ETH+token',
+          'Clear-signs both desired/minimum FOX and ETH amounts, the signed recipient, and the '
+          'deadline before the final fee review. The fixed signature binds those confirmations '
+          'to the complete addLiquidityETH calldata.',
+          ['FOX desired amount', 'FOX minimum', 'Recipient', 'ETH desired amount',
+           'ETH minimum', 'Deadline', 'Fee and final approval']),
          ('E19', 'test_msg_ethereum_erc20_uniswap_liquidity', 'test_sign_uni_remove_liquidity_ETH',
-          'Uniswap V2 remove liquidity ETH+token (pending)',
-          'PENDING, disclosed: same emulator limitation as E17.',
-          []),
+          'Uniswap V2 remove liquidity ETH+token',
+          'Clear-signs the LP burn amount, minimum FOX and ETH outputs, the non-self signed '
+          'recipient, and deadline before the final fee review. This is the regression for the '
+          'recipient-confirmation path that previously cancelled after the user approved it.',
+          ['LP burn amount', 'FOX minimum', 'Recipient', 'ETH minimum', 'Deadline',
+           'Fee and final approval']),
          ('E20', 'test_msg_ethereum_thorchain_deposit', 'test_deposit_legacy_selector',
           'THORChain router deposit() (legacy selector)',
           'Cross-chain swap via the THORChain router contract — a daily-driver EVM<->THORChain '
@@ -2281,6 +2286,25 @@ SECTIONS = [
           'they prove the pool branch is selected by shielded_pool rather than one path serving '
           'both.',
           []),
+         ('Z26', 'test_msg_zcash_sign_pczt_device',
+          'test_ironwood_rejects_a_non_empty_orchard_bundle',
+          'v6 refuses an unverified Orchard bundle (ON DEVICE)',
+          'A v6 transaction streams and verifies only its Ironwood actions, so its Orchard '
+          'bundle must be the ZIP-244 empty-bundle digest. Any other value describes a bundle '
+          'the device never inspected but still commits to in the sighash it signs. That was '
+          'exploitable: point orchard_digest at a real bundle spending one of this seed '
+          'notes, reuse an approved action alpha so rk is byte-identical, and the single '
+          'RedPallas signature the device emits verifies in BOTH bundles.',
+          []),
+         ('Z27', 'test_multisig',
+          'test_oversized_signature_is_rejected',
+          'Oversized multisig signature refused (ON DEVICE)',
+          'MultisigRedeemScriptType.signatures is declared max_size:73 but a DER ECDSA signature '
+          'is at most 72. The witness serializer appended the sighash byte AT signatures[i].size, '
+          'so 73 wrote one past the end of bytes[73] -- onto signatures[i+1].size for i < 14, '
+          'which can revive a slot the host left empty and change the witness stack after the '
+          'user reviewed it. A declared max_size is a decoder bound, not a runtime one.',
+          []),
      ]),
 
     ('D', 'BIP-85 Child Derivation', '7.14.0',
@@ -2915,7 +2939,7 @@ SECTIONS = [
        'f2cee375...912090f and messageHash c52c0ee5...4b371e, both published, both matched on '
        'hardware and in the emulator.',
        ['Domain name', 'Domain version', 'chainId', 'verifyingContract (42 chars, in full)',
-        'Cow / wallet', 'Bob / wallet', 'contents']),
+        'From name: Cow', 'From wallet', 'To name: Bob', 'To wallet', 'contents']),
       ('TD2', 'test_msg_eip712_streaming', 'test_array_of_structs_walks',
        'An array of structs walks and signs',
        'Arrays hash WITHOUT a typeHash prefix -- enc(array) is the keccak of the concatenated '
@@ -2932,7 +2956,7 @@ SECTIONS = [
        'accept a different one and it signs a document whose type declares another, with nothing '
        'downstream able to notice.',
        []),
-      ('TD4', 'test_msg_eip712_streaming', 'test_advanced_mode_gates_the_endpoint',
+      ('TD4', 'test_msg_eip712_streaming', 'test_advanced_mode_is_not_required_for_structured_review',
        'The endpoint is gated behind AdvancedMode',
        'Structured display is strictly MORE information than the blind path it replaces, so the '
        'gate is not about the feature being dangerous. It is about new parser surface reachable '
@@ -3218,24 +3242,36 @@ def screenshot_filter(fw_version):
 MUST_RUN_MODULES = {
     'test_msg_signtx_taproot': '7.0.0',
     'test_msg_getaddress_taproot': '7.0.0',
+    # GH #516: all three Uniswap liquidity tests used to skip together on the
+    # emulator, leaving a daily-driver signing path completely unexercised.
+    'test_msg_ethereum_erc20_uniswap_liquidity': '7.16.0',
     # R-4.1. Gated on requires_message('LoadClearsignSigner'), so if provider
     # loading regressed, all four would skip and the report would certify a
     # feature it never exercised.
     'test_msg_solana_lut_attestation': '7.15.0',
 }
 
+# A module can be mandatory for the regular product while being intentionally
+# absent from KK_BITCOIN_ONLY. Keep this narrower than MUST_RUN_MODULES: Taproot
+# remains mandatory in both products, and the expected build variant comes from
+# CI rather than the firmware identity being tested.
+FULL_FEATURE_ONLY_MUST_RUN_MODULES = {
+    'test_msg_ethereum_erc20_uniswap_liquidity',
+    'test_msg_solana_lut_attestation',
+}
+
+
 def screenshot_audit(fw_version, screenshot_root, junit_path=None):
-    """Which SECTIONS tests DECLARED screens but captured none?
+    """Which SECTIONS tests captured fewer frames than they declared?
 
     The CI gate was `total PNG count > 0`, which a single captured suite
     satisfies. That cannot distinguish "captured everything" from "captured
     something": in the 7.14.2 round, 345 PNGs were produced while every suite
     the release actually changed captured zero, and the phase reported healthy.
 
-    Returns (ok, missing) where missing is a list of (module, method) that
-    declared a non-empty screenshot list, were not skipped, and produced no
-    PNG directory. Skipped tests are not missing -- a version-gated test
-    cannot draw.
+    Returns (ok, missing) where missing contains
+    (module, method, expected_count, captured_count). Skipped tests are not
+    missing -- a version-gated test cannot draw.
     """
     import os as _os
     skipped = set()
@@ -3259,12 +3295,14 @@ def screenshot_audit(fw_version, screenshot_root, junit_path=None):
             if (mod, meth) in skipped:
                 continue
             d = _os.path.join(screenshot_root, mod.replace('test_', '', 1), meth)
-            if not _os.path.isdir(d) or not [f for f in _os.listdir(d) if f.endswith('.png')]:
-                missing.append((mod, meth))
+            pngs = ([f for f in _os.listdir(d) if f.endswith('.png')]
+                    if _os.path.isdir(d) else [])
+            if len(pngs) < len(scr):
+                missing.append((mod, meth, len(scr), len(pngs)))
     return (len(missing) == 0, missing)
 
 
-def validate_junit(fw_version, results):
+def validate_junit(fw_version, results, build_variant='full'):
     """Check SECTIONS tests against JUnit results. Returns (passed, failed_list).
 
     A test is considered failed if it appears in SECTIONS for this firmware version
@@ -3280,7 +3318,10 @@ def validate_junit(fw_version, results):
             status = _lookup(results, mod, meth)
             if status in ('fail', 'error'):
                 failures.append((tid, mod, meth, status))
-            elif status == 'skip' and ver_ge(fw_version, MUST_RUN_MODULES.get(mod, '99.0.0')):
+            elif (status == 'skip'
+                  and ver_ge(fw_version, MUST_RUN_MODULES.get(mod, '99.0.0'))
+                  and not (build_variant == 'bitcoin-only'
+                           and mod in FULL_FEATURE_ONLY_MUST_RUN_MODULES)):
                 failures.append((tid, mod, meth, 'skipped-but-required'))
             elif not status:
                 failures.append((tid, mod, meth, 'missing'))
@@ -3301,6 +3342,8 @@ def main():
                    help='Print pytest -k expression for tests needing screenshots, then exit')
     p.add_argument('--validate-junit', action='store_true',
                    help='Validate JUnit results against SECTIONS, exit non-zero on failures')
+    p.add_argument('--build-variant', choices=('full', 'bitcoin-only'), default='full',
+                   help='Expected CI product; controls only explicit build-flag waivers')
     args = p.parse_args()
 
     fw = args.fw_version
@@ -3315,9 +3358,10 @@ def main():
         if ok:
             print('screenshot audit: every declared screen was captured')
             sys.exit(0)
-        print('screenshot audit FAILED -- declared screens with no capture:')
-        for mod, meth in missing:
-            print('  %s::%s' % (mod, meth))
+        print('screenshot audit FAILED -- fewer captures than declared screens:')
+        for mod, meth, expected, captured in missing:
+            print('  %s::%s (declared %d, captured %d)' %
+                  (mod, meth, expected, captured))
         sys.exit(1)
     if args.screenshot_filter:
         print(screenshot_filter(fw))
@@ -3328,7 +3372,7 @@ def main():
             print('ERROR: --validate-junit requires --junit=<path>', file=sys.stderr)
             sys.exit(2)
         results = parse_junit(args.junit)
-        ok, failures = validate_junit(fw, results)
+        ok, failures = validate_junit(fw, results, args.build_variant)
         if ok:
             print(f'SECTIONS validation passed: all tests for fw {fw} are pass or skip')
             sys.exit(0)

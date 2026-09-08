@@ -29,7 +29,7 @@ class ETHTokenTable(object):
             fullpath = os.path.join(dirname, filename)
 
             if not os.path.isfile(fullpath):
-                return
+                continue
 
             with open(fullpath, 'r') as f:
                 token = json.load(f)
@@ -37,11 +37,21 @@ class ETHTokenTable(object):
                 self.tokens.append(ETHToken(token, network))
 
     def build(self):
+        source = HERE + '/ethereum-lists/src/tokens'
+        if not os.path.isdir(source):
+            raise RuntimeError(
+                'vetted ethereum-lists token source is missing; initialize '
+                'submodules recursively before generating firmware tables')
+
         with open(HERE + '/ethereum_networks.json', 'r') as f:
             networks = json.load(f)
 
             for network in networks:
                 self.add_tokens(network)
+
+        if not self.tokens:
+            raise RuntimeError(
+                'vetted ethereum-lists token source produced zero candidates')
 
     def serialize_c(self, outf):
         # Flash budget: this table is the largest read-only symbol in the ARM
@@ -55,7 +65,8 @@ class ETHTokenTable(object):
             self.tokens,
             token_policy.BUDGET_ETHEREUM_LISTS,
             symbol_of=lambda t: t.token.get('symbol', ''),
-            address_of=lambda t: t.token['address'].lower())
+            address_of=lambda t: t.token['address'].lower(),
+            chain_of=lambda t: t.network['chain_id'])
         print('ethereum_tokens: %d of %d kept (budget %d)'
               % (len(chosen), len(self.tokens),
                  token_policy.BUDGET_ETHEREUM_LISTS), file=sys.stderr)

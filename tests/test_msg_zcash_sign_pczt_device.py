@@ -159,10 +159,20 @@ def sign_kwargs(actions, ironwood=False, **overrides):
     if ironwood:
         kwargs['shielded_pool'] = zcash_proto.ZCASH_SHIELDED_POOL_IRONWOOD
         kwargs['ironwood_digest'] = digest
-        # orchard_digest is still required to be present and 32 bytes, but for
-        # Ironwood it is the ironwood_digest that is verified against the
-        # actions; this one only feeds the locally derived sighash.
-        kwargs['orchard_digest'] = b'\x00' * 32
+        # A v6 transaction streams and verifies only its Ironwood actions, so
+        # its Orchard bundle must be EMPTY -- and provably so. This used to be
+        # b'\x00' * 32, arbitrary filler, with a comment noting that the field
+        # "only feeds the locally derived sighash". That was the bug: the
+        # device signed a sighash committing to an Orchard bundle it never
+        # inspected, and a host could point it at a real bundle spending the
+        # victim's note, reusing an approved action's alpha so the one emitted
+        # RedPallas signature verified in both bundles.
+        #
+        # ZIP-229 v6 empty-bundle digest: BLAKE2b-256 of the empty string
+        # personalized "ZTxIdOrchardH_v6". The v5/ZIP-244
+        # "ZTxIdOrchardHash" value is a different digest.
+        kwargs['orchard_digest'] = bytes.fromhex(
+            'a3367d2fdea2910159fc5026e9bf1fccd3e28ce5e6de46bfb71587230eea9515')
     kwargs.update(overrides)
     return kwargs
 
@@ -234,6 +244,10 @@ class TestZcashShieldedSigningDevice(common.KeepKeyTest):
         matters: one screen cannot hold both, and collapsing them back into one
         reintroduces exactly the defect.
         """
+        # RC18 has the Orchard flow but predates the repair that separates the
+        # amount and 106-character unified address. That UI fix first ships in
+        # 7.16, so do not mislabel it as an RC18 regression in this host suite.
+        self.requires_firmware("7.16.0")
         actions = [note_action(CMX_ORCHARD)]
         screens = self._capture_button_screens()
 
@@ -280,6 +294,20 @@ class TestZcashShieldedSigningDevice(common.KeepKeyTest):
             self.client.zcash_sign_pczt(**sign_kwargs(actions))
         self.assertIn('commitment mismatch', str(caught.exception))
 
+    # The Ironwood pool is NOT part of the 7.15/RC18 product. The note
+    # fixtures below come from unittests/firmware/zcash.cpp, and
+    # IronwoodNoteCommitment_V3KnownVector does not exist on the RC18 branch
+    # (audit/7.15.0-rc18-final) -- it arrives with 7.16. The class-level
+    # requires_firmware("7.15.0") is a FLOOR, so without this these two would
+    # run against RC18 and fail. Gate them to the release that implements the
+    # pool, so RC18 skips instead.
+    #
+    # NB: this is about firmware support, not the wire contract.
+    # messages-zcash.proto marks only `sapling_digest` as reserved and
+    # currently rejected; `shielded_pool` and `ironwood_digest` are ordinary
+    # v6 fields there.
+    IRONWOOD_FIRMWARE = "7.16.0"
+
     def test_pool_selection_is_honoured(self):
         """The same note commits differently in each pool.
 
@@ -287,11 +315,37 @@ class TestZcashShieldedSigningDevice(common.KeepKeyTest):
         offering the Orchard commitment while declaring the Ironwood pool must
         be rejected. If the device ignored shielded_pool this would pass.
         """
+        self.requires_firmware(self.IRONWOOD_FIRMWARE)
         actions = [note_action(CMX_ORCHARD)]
 
         with self.assertRaises(Exception) as caught:
             self.client.zcash_sign_pczt(**sign_kwargs(actions, ironwood=True))
         self.assertIn('commitment mismatch', str(caught.exception))
+
+    def test_ironwood_rejects_a_non_empty_orchard_bundle(self):
+        """A v6 transaction may not carry an unverified Orchard bundle.
+
+        The device streams and verifies only the ACTIVE pool's actions. On the
+        Ironwood path that is the Ironwood bundle, so an orchard_digest other
+        than the empty-bundle value describes a bundle the device never
+        inspected yet still commits to in the sighash it signs.
+
+        That was exploitable, not merely untidy: point orchard_digest at a real
+        Orchard bundle spending one of this seed's notes, reuse the alpha of an
+        approved Ironwood action so rk is byte-identical, and the single
+        RedPallas signature the device emits verifies in BOTH bundles, because
+        verification is [s]G = R + [H(R||rk||M)]rk and rk and M are shared. The
+        Orchard bundle's valueBalance never enters the device's fee check.
+        """
+        self.requires_firmware(self.IRONWOOD_FIRMWARE)
+        actions = [note_action(CMX_IRONWOOD)]
+        kwargs = sign_kwargs(actions, ironwood=True)
+        # Anything but the ZIP-229 v6 empty-bundle digest must be refused.
+        kwargs['orchard_digest'] = bytes([0x11]) * 32
+
+        with self.assertRaises(Exception) as caught:
+            self.client.zcash_sign_pczt(**kwargs)
+        self.assertIn('empty Orchard bundle', str(caught.exception))
 
     def test_ironwood_note_is_accepted(self):
         """The Ironwood commitment for that same note is accepted.
@@ -299,6 +353,7 @@ class TestZcashShieldedSigningDevice(common.KeepKeyTest):
         The positive half of the pool test -- together they prove the branch is
         selected by shielded_pool rather than one path serving both.
         """
+        self.requires_firmware(self.IRONWOOD_FIRMWARE)
         actions = [note_action(CMX_IRONWOOD)]
         screens = self._capture_button_screens()
 

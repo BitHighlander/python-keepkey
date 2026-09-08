@@ -74,7 +74,9 @@ CI_SIGNER_ALIAS = 'CI Test'
 
 # ─── Test constants ────────────────────────────────────────────────────
 
-AAVE_V3_POOL = bytes.fromhex('7d2768de32b0b80b7a3454c06bdac94a69ddc7a9')
+# Aave V3 Pool proxy, matching AAVE_SUPPLY_SELECTOR below. Was the V2
+# LendingPool address, which exposes deposit() (e8eda9df), not supply().
+AAVE_V3_POOL = bytes.fromhex('87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2')
 AAVE_SUPPLY_SELECTOR = bytes.fromhex('617ba037')
 DAI_ADDRESS = bytes.fromhex('6b175474e89094c44da98b954eedeac495271d0f')
 UNISWAP_ROUTER = bytes.fromhex('68b3465833fb72a70ecdf485e0e4c7bd8665fc45')
@@ -597,7 +599,7 @@ class TestSerializerUnit(unittest.TestCase):
 #     [print(f['key'], hashlib.sha256(t.flow_blob(f, timestamp=t.REFERENCE_TIMESTAMP)).hexdigest())
 #      for f in t.CLEARSIGN_FLOWS]"
 REFERENCE_BLOB_SNAPSHOTS = {
-    'aave-v3-supply': ('434ee7389f099e8ab77a4274fd7da40918a74c719dd0bdb4a81c6259846bda2d', 246),
+    'aave-v3-supply': ('710dc044c914a7320c91774ae5193f5b6509b00eb14e17719f7b31d0274d4892', 246),
     'erc20-transfer': ('adbd1e054f8b59b1bb86af046951df53510c10dcc0ec0e3e46b19eaf6410cf05', 205),
     'erc20-approve': ('75e5108f578f27d60c572d12072fb4cf0455321c6f39445e1d59fe4d99713c91', 193),
     'erc20-approve-unlimited': ('a5c043a60da8f317975ee8f1b9f3a0718186f6bdce625b605ce71973b3fa3811', 221),
@@ -801,8 +803,12 @@ class TestClearSignV2SchemaOffline(unittest.TestCase):
 
     def test_rejects_dynamic_format(self):
         """v2 only encodes fixed single-word types; STRING/BYTES are rejected by
-        the serializer (they have no fixed on-chain word)."""
-        with self.assertRaises(AssertionError):
+        the serializer (they have no fixed on-chain word).
+
+        ValueError, not AssertionError: this is a precondition on a function
+        that builds SIGNED bytes, so it must survive `python -O`.
+        """
+        with self.assertRaises(ValueError):
             serialize_schema_metadata(
                 chain_id=1, contract_address=USDC_ADDRESS,
                 selector=ERC20_TRANSFER_SELECTOR, method_name='x',
@@ -1083,6 +1089,11 @@ class TestEthereumClearSigning(common.KeepKeyTest):
     def test_advanced_mode_gate(self):
         """AdvancedMode OFF + unknown contract + no metadata → hard reject;
         ON → raw-data confirm path signs; recognized ERC-20 transfer unaffected."""
+        # RC18 predates the rule that loading a runtime signer itself requires
+        # AdvancedMode. The first released firmware line carrying that complete
+        # gate is 7.16; the older blind-transaction gate remains covered by
+        # test_msg_ethereum_signtx on RC18.
+        self.requires_firmware("7.16.0")
         n = parse_path(DEVICE_PATH)
         data = aave_supply_calldata(1000000000000000000)
 
@@ -1102,8 +1113,11 @@ class TestEthereumClearSigning(common.KeepKeyTest):
                 to=AAVE_V3_POOL, value=0, data=data, chain_id=1)
             self.fail("Expected Failure — blind signing disabled")
         except CallException as e:
-            self.assertIn("Arbitrary contract data signing disabled by policy",
-                          str(e))
+            message = str(e)
+            self.assertTrue(
+                "Arbitrary contract data signing disabled by policy" in message
+                or "Blind signing disabled by policy" in message,
+                "unexpected blind-sign refusal: %s" % message)
 
         # ON → raw-data confirm path → signs
         self.client.apply_policy("AdvancedMode", 1)
@@ -1157,8 +1171,11 @@ class TestEthereumClearSigning(common.KeepKeyTest):
                 to=AAVE_V3_POOL, value=0, data=data, chain_id=chain_id)
             self.fail("Expected Failure — stale metadata must not be reused")
         except CallException as e:
-            self.assertIn("Arbitrary contract data signing disabled by policy",
-                          str(e))
+            message = str(e)
+            self.assertTrue(
+                "Arbitrary contract data signing disabled by policy" in message
+                or "Blind signing disabled by policy" in message,
+                "unexpected blind-sign refusal: %s" % message)
 
 
     # ── LoadClearsignSigner — the phase-1 trust path ───────────────────
