@@ -149,7 +149,7 @@ class TestSigningBoundaries(common.KeepKeyTest):
                 self.client.call_raw(proto.ClearSession())
 
     def test_multisig_signature_over_72_bytes_is_rejected(self):
-        """A decoder-sized 74-byte signature must never reach serialization."""
+        """An oversized signature must fail decoding and terminate signing."""
         self.requires_firmware("7.14.2")
         self.setup_mnemonic_nopin_nopassphrase()
         node = ckd_public.deserialize(self.XPUB)
@@ -181,7 +181,8 @@ class TestSigningBoundaries(common.KeepKeyTest):
             tx=proto_types.TransactionType(inputs=[tx_input])
         ))
         self.assertIsInstance(rejected, proto.Failure)
-        self.assertEqual(rejected.code, proto_types.Failure_SyntaxError)
+        self.assertEqual(rejected.code, proto_types.Failure_UnexpectedMessage)
+        self.assertEqual(rejected.message, "Could not parse protocol buffer message")
         self._assert_late_txack_rejected()
 
     def test_clear_session_aborts_active_bitcoin_signing(self):
