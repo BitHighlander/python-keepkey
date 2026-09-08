@@ -15,6 +15,7 @@ Test key: private=0x01 (secp256k1 generator point G) — NEVER use in production
 """
 
 import unittest
+import os
 import hashlib
 import struct
 
@@ -414,6 +415,11 @@ class TestEthereumClearSigning(common.KeepKeyTest):
         self.requires_firmware("7.14.0")
         self.requires_message("EthereumTxMetadata")
         self.setup_mnemonic_nopin_nopassphrase()
+        if os.environ.get("KEEPKEY_RUNTIME_PROVIDER") == "1":
+            self.client.apply_policy("AdvancedMode", True)
+            from runtime_provider import load_test_provider
+            load_test_provider(self.client)
+            common.reset_screenshot_capture(self.client)
 
     def test_valid_metadata_returns_verified(self):
         """Send valid signed metadata → device returns VERIFIED."""
