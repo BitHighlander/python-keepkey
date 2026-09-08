@@ -44,13 +44,15 @@ chain = bytes.fromhex('aca376f206b8fc25a6ed44dbdc66547c36c6c33e3a119ffbeaef94364
 
 class UpdateAuthVector(unittest.TestCase):
     def test_zero_waits(self):
+        phantom_wait = struct.pack("<IH", 0, 0)  # wait_sec=0, weight=0
         for extra, expected in [
             (b"", "5938294e65cf9e8b5dd5f2b204503b4825f277e6f4a2d5ab7a55a31065a23af1"),
-            (bytes(6), "fb936ef1be4bda680d93bd10b6d062357d8dd7272038a706dc0d61a91f39c5ee"),
+            (phantom_wait, "fb936ef1be4bda680d93bd10b6d062357d8dd7272038a706dc0d61a91f39c5ee"),
         ]:
-            data = prefix + auth + extra
-            preimage = chain + header + common + var(len(data)) + data + b"\0" + bytes(32)
-            self.assertEqual(hashlib.sha256(preimage).hexdigest(), expected)
+            with self.subTest(legacy_phantom_wait=bool(extra)):
+                data = prefix + auth + extra
+                preimage = chain + header + common + var(len(data)) + data + b"\0" + bytes(32)
+                self.assertEqual(hashlib.sha256(preimage).hexdigest(), expected)
 
 if __name__ == "__main__":
     unittest.main()
