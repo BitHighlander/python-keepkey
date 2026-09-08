@@ -212,6 +212,29 @@ class TestMsgEip712Streaming(common.KeepKeyTest):
         self.assertIsInstance(resp, eth.EthereumTypedDataSignature)
         self.assertEqual(len(resp.signature), 65)
 
+    def test_multidimensional_arrays_walk_outermost_first_on_device(self):
+        """Host and device must traverse asymmetric Solidity dimensions alike."""
+        doc = {
+            'types': {
+                'EIP712Domain': [],
+                'Matrix': [{'name': 'values', 'type': 'int16[2][4]'}],
+            },
+            'primaryType': 'Matrix',
+            'domain': {},
+            'message': {
+                'values': [
+                    [1, 2],
+                    [3, 4],
+                    [5, 6],
+                    [7, 8],
+                ],
+            },
+        }
+
+        resp = self._walk(doc)
+        self.assertIsInstance(resp, eth.EthereumTypedDataSignature)
+        self.assertEqual(len(resp.signature), 65)
+
     def test_permit2_batch_walks_realistic_nested_array(self):
         """The production Permit2 Batch shape, including trailing root fields.
 
