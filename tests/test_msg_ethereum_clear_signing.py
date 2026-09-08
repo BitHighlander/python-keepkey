@@ -22,7 +22,7 @@ import struct
 try:
     import common
 except ImportError:
-    import sys, os
+    import sys
     sys.path.insert(0, os.path.dirname(__file__))
     import common
 
@@ -416,6 +416,8 @@ class TestEthereumClearSigning(common.KeepKeyTest):
         self.requires_message("EthereumTxMetadata")
         self.setup_mnemonic_nopin_nopassphrase()
         if os.environ.get("KEEPKEY_RUNTIME_PROVIDER") == "1":
+            # Explicit CI mode requires the fixture and its dependencies.
+            # Missing ecdsa must fail rather than skip signature validation.
             self.client.apply_policy("AdvancedMode", True)
             from runtime_provider import load_test_provider
             load_test_provider(self.client)
