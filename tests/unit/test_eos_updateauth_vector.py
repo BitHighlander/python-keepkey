@@ -11,18 +11,36 @@ import unittest
 pub = bytes.fromhex("037eca30dbc22ecc6d38d95a7e4b49f6b77fa87be608250319b75e2564ccb60143")
 
 def name(s):
- alphabet='.12345abcdefghijklmnopqrstuvwxyz';value=0
- for x in range(13):value=(value << (5 if x<12 else 4)) | (alphabet.index(s[x]) if x<len(s) else 0)
- return struct.pack('<Q',value)
+    alphabet = '.12345abcdefghijklmnopqrstuvwxyz'
+    value = 0
+    for x in range(13):
+        width = 5 if x < 12 else 4
+        symbol = alphabet.index(s[x]) if x < len(s) else 0
+        value = (value << width) | symbol
+    return struct.pack('<Q', value)
+
+
 def var(x):
- b=bytearray()
- while x>=128:b.append((x&127)|128);x>>=7
- b.append(x);return bytes(b)
-auth=struct.pack('<I',1)+b'\x01\x01'+pub+struct.pack('<H',1)+b'\x01'+name('memememememe')+name('active')+struct.pack('<H',1)+b'\0'
-prefix=name('memememememe')+name('active')+name('momomomomom')
-header=struct.pack('<IHI',1544644800,0,0)+b'\0\0'+var(13337)+b'\0\x01'
-common=name('eosio')+name('updateauth')+b'\x01'+name('eosio')+name('owner')
-chain=bytes.fromhex('aca376f206b8fc25a6ed44dbdc66547c36c6c33e3a119ffbeaef943642f0e906')
+    b = bytearray()
+    while x >= 128:
+        b.append((x & 127) | 128)
+        x >>= 7
+    b.append(x)
+    return bytes(b)
+
+
+auth = (
+    struct.pack('<I', 1)  # threshold
+    + b'\x01\x01' + pub + struct.pack('<H', 1)  # one K1 key, weight 1
+    + b'\x01' + name('memememememe') + name('active')
+    + struct.pack('<H', 1)  # one permission-level account, weight 1
+    + b'\0'  # zero waits
+)
+prefix = name('memememememe') + name('active') + name('momomomomom')
+header = struct.pack('<IHI', 1544644800, 0, 0) + b'\0\0' + var(13337) + b'\0\x01'
+common = name('eosio') + name('updateauth') + b'\x01' + name('eosio') + name('owner')
+chain = bytes.fromhex('aca376f206b8fc25a6ed44dbdc66547c36c6c33e3a119ffbeaef943642f0e906')
+
 
 class UpdateAuthVector(unittest.TestCase):
     def test_zero_waits(self):
