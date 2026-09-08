@@ -998,6 +998,8 @@ class TestStorageUpgradePreservation(unittest.TestCase):
                 label=LABEL, language="english")
             c.init_device()
             self.assertTrue(c.features.initialized)
+            from keepkeylib import messages_pb2 as proto
+            self.bitcoin_only = c.call(proto.GetCoinTable()).num_coins == 2
             addr = c.get_address("Bitcoin", BIP44_ADDRESS_N)
         finally:
             c.close()
@@ -1063,6 +1065,8 @@ class TestStorageUpgradePreservation(unittest.TestCase):
         # only record which branch the author was standing on.
         declared = _define(_read_source("include/keepkey/firmware/storage.h"),
                            "STORAGE_VERSION")
+        if self.bitcoin_only:
+            declared += STORAGE_VERSION_BTC_ONLY_BASE
         self.assertEqual(
             declared, self.emu.read_u32(off, OFF_VERSION),
             "the firmware committed a storage version other than the %d its "
@@ -1189,6 +1193,24 @@ class TestStorageUpgradePreservation(unittest.TestCase):
         wallet comes back once the stamp is the multi-chain one again.
         """
         addr, off = self._create_wallet()
+        if self.bitcoin_only:
+            # This product must read its own band; the full-product branch below
+            # must refuse the same band while preserving its bytes.
+            declared = _define(_read_source("include/keepkey/firmware/storage.h"),
+                               "STORAGE_VERSION")
+            self.assertEqual(STORAGE_VERSION_BTC_ONLY_BASE + declared,
+                             self.emu.read_u32(off, OFF_VERSION))
+            before = self.emu.image()
+            self.emu.boot()
+            c = self.emu.client(self.method, pin=PIN)
+            try:
+                c.init_device()
+                self.assertTrue(c.features.initialized)
+                self.assertEqual(before, self.emu.image())
+                self.assertEqual(addr, c.get_address("Bitcoin", BIP44_ADDRESS_N))
+            finally:
+                c.close()
+            return
         self.assertLess(
             self.emu.read_u32(off, OFF_VERSION), STORAGE_VERSION_BTC_ONLY_BASE,
             "this emulator already stamps its wallets into the bitcoin-only "
