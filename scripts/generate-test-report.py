@@ -2025,7 +2025,7 @@ SECTIONS = [
          # lookup table cannot be resolved on-device, so today the device signs
          # accounts it never showed. These four are the additive invariant
          # (section F) restated for Solana, and R-4.1 of SRS-7.15. The
-         # protocol work first ships in firmware 7.16.
+         # canonical 7.15 product includes this protocol work.
          ('S26', 'test_msg_solana_lut_attestation',
           'test_attested_accounts_are_shown_and_blind_sign_still_follows',
           'Attested lookup-table accounts are shown, and the blind-sign warning survives',
@@ -3293,7 +3293,7 @@ MUST_RUN_MODULES = {
     # R-4.1. Gated on requires_message('LoadClearsignSigner'), so if provider
     # loading regressed, all four would skip and the report would certify a
     # feature it never exercised.
-    'test_msg_solana_lut_attestation': '7.16.0',
+    'test_msg_solana_lut_attestation': '7.15.0',
 }
 
 # These modules are mandatory only on the multi-chain product. Their handlers

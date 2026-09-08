@@ -1100,11 +1100,8 @@ class TestEthereumClearSigning(common.KeepKeyTest):
     def test_advanced_mode_gate(self):
         """AdvancedMode OFF + unknown contract + no metadata → hard reject;
         ON → raw-data confirm path signs; recognized ERC-20 transfer unaffected."""
-        # RC18 predates the rule that loading a runtime signer itself requires
-        # AdvancedMode. The first released firmware line carrying that complete
-        # gate is 7.16; the older blind-transaction gate remains covered by
-        # test_msg_ethereum_signtx on RC18.
-        self.requires_firmware("7.16.0")
+        # Canonical 7.15 requires AdvancedMode before runtime signer loading.
+        self.requires_firmware("7.15.0")
         n = parse_path(DEVICE_PATH)
         data = aave_supply_calldata(1000000000000000000)
 
