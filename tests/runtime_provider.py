@@ -2,19 +2,27 @@
 from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
 from keepkeylib import mapping, messages_pb2 as proto
 
+LOAD_CLEARSIGN_SIGNER_WIRE_ID = 117
+FIELD = descriptor_pb2.FieldDescriptorProto
+
 # The audited host pin predates this message. Keep the fixture wire contract
 # narrow rather than importing unrelated generated protocol changes.
 spec = descriptor_pb2.FileDescriptorProto(name="runtime_provider_fixture.proto", syntax="proto2")
 message = spec.message_type.add(name="FixtureLoadClearsignSigner")
-for number, name, kind in [(1, "key_id", 13), (2, "pubkey", 12),
-                           (3, "alias", 9), (7, "persist", 8)]:
-    message.field.add(name=name, number=number, type=kind, label=1)
+for number, name, kind in [(1, "key_id", FIELD.TYPE_UINT32),
+                           (2, "pubkey", FIELD.TYPE_BYTES),
+                           (3, "alias", FIELD.TYPE_STRING),
+                           (7, "persist", FIELD.TYPE_BOOL)]:
+    message.field.add(name=name, number=number, type=kind, label=FIELD.LABEL_OPTIONAL)
 pool = descriptor_pool.DescriptorPool()
 pool.Add(spec)
 LoadSigner = message_factory.MessageFactory(pool).GetPrototype(
     pool.FindMessageTypeByName("FixtureLoadClearsignSigner"))
-mapping.map_class_to_type[LoadSigner] = 117
-mapping.map_type_to_class[117] = LoadSigner
+if (LOAD_CLEARSIGN_SIGNER_WIRE_ID in mapping.map_type_to_class or
+        LOAD_CLEARSIGN_SIGNER_WIRE_ID in mapping.map_class_to_type.values()):
+    raise RuntimeError("Runtime provider fixture wire ID is already registered")
+mapping.map_class_to_type[LoadSigner] = LOAD_CLEARSIGN_SIGNER_WIRE_ID
+mapping.map_type_to_class[LOAD_CLEARSIGN_SIGNER_WIRE_ID] = LoadSigner
 
 
 def load_test_provider(client):
