@@ -1,8 +1,10 @@
 """Independent EOS updateauth wire vector; no emulator or protobuf required.
 
 Public key: test mnemonic from common.py, path m/48'/4'/1'/0'/0'.
-The legacy firmware serialized one zero wait because it used accounts_count
-instead of waits_count. Both digests below prove the exact discrepancy.
+The authority contains one account and zero waits. The corrected case hashes
+that authority unchanged; the legacy case appends one six-byte zero wait
+(wait_sec=0, weight=0) and updates the action-data length. This models the old
+firmware using accounts_count instead of waits_count for wait serialization.
 """
 import hashlib
 import struct
