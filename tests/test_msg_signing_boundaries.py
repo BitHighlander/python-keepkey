@@ -27,7 +27,7 @@ class TestSigningBoundaries(common.KeepKeyTest):
         self.setup_mnemonic_nopin_nopassphrase()
 
     def test_multisig_signature_over_72_bytes_is_rejected(self):
-        """A decoder-sized 74-byte signature must never reach serialization."""
+        """An oversized signature must fail decoding and terminate signing."""
         node = ckd_public.deserialize(XPUB)
         multisig = types.MultisigRedeemScriptType(
             pubkeys=[
@@ -60,7 +60,8 @@ class TestSigningBoundaries(common.KeepKeyTest):
             tx=types.TransactionType(inputs=[tx_input])
         ))
         self.assertIsInstance(rejected, proto.Failure)
-        self.assertEqual(rejected.code, types.Failure_SyntaxError)
+        self.assertEqual(rejected.code, types.Failure_UnexpectedMessage)
+        self.assertEqual(rejected.message, "Could not parse protocol buffer message")
 
         # Rejection is terminal rather than leaving a partially initialized
         # signer available to a follow-up TxAck.
