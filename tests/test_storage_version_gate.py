@@ -474,6 +474,7 @@ class Emulator(object):
         self.port = _free_port_pair()
         self.img = os.path.join(workdir, "emulator.img")
         self.proc = None
+        self._endpoint_lease = None
 
     # -- process ------------------------------------------------------------
 
@@ -495,15 +496,22 @@ class Emulator(object):
             self.proc = subprocess.Popen(
                 [_EMULATOR_BIN], cwd=self.workdir, env=env, stdout=log,
                 stderr=subprocess.STDOUT)
-        for _ in range(100):
-            time.sleep(0.1)
-            if self.proc.poll() is not None:
-                raise RuntimeError(
-                    "emulator exited rc=%s before answering; see %s"
-                    % (self.proc.returncode, os.path.join(self.workdir, "emu.log")))
-            if self._ping():
-                return
-        raise RuntimeError("emulator did not answer PINGPING on port %d" % self.port)
+        from emulator_endpoints import owned_emulator_pair
+        try:
+            self._endpoint_lease = owned_emulator_pair(self.port)
+            self._endpoint_lease.__enter__()
+            for _ in range(100):
+                time.sleep(0.1)
+                if self.proc.poll() is not None:
+                    raise RuntimeError(
+                        "emulator exited rc=%s before answering; see %s"
+                        % (self.proc.returncode, os.path.join(self.workdir, "emu.log")))
+                if self._ping():
+                    return
+            raise RuntimeError("emulator did not answer PINGPING on port %d" % self.port)
+        except BaseException:
+            self.halt()
+            raise
 
     def halt(self):
         """Power cycle, not a graceful shutdown -- flash keeps whatever
@@ -518,6 +526,9 @@ class Emulator(object):
                 self.proc.kill()
                 self.proc.wait()
         self.proc = None
+        if self._endpoint_lease is not None:
+            self._endpoint_lease.__exit__(None, None, None)
+            self._endpoint_lease = None
         time.sleep(0.2)
 
     # -- client -------------------------------------------------------------
