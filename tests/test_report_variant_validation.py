@@ -26,11 +26,20 @@ def catalog_results_with_solana_lut_skipped(fw_version):
 
 class TestReportVariantValidation(unittest.TestCase):
 
-    def test_full_715_accepts_pre_release_solana_lut_skip(self):
+    def test_full_7143_accepts_unimplemented_solana_lut_skip(self):
         result = REPORT.validate_junit(
-            '7.15.0', catalog_results_with_solana_lut_skipped('7.15.0'),
+            '7.14.3', catalog_results_with_solana_lut_skipped('7.14.3'),
             'full')
         self.assertEqual((True, []), result)
+
+    def test_full_715_requires_solana_lut_coverage(self):
+        ok, failures = REPORT.validate_junit(
+            '7.15.0', catalog_results_with_solana_lut_skipped('7.15.0'),
+            'full')
+        self.assertFalse(ok)
+        self.assertEqual(4, len(failures))
+        self.assertTrue(all(item[3] == 'skipped-but-required'
+                            for item in failures))
 
     def test_full_716_requires_solana_lut_coverage(self):
         ok, failures = REPORT.validate_junit(
