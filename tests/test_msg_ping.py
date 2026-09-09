@@ -27,6 +27,25 @@ from keepkeylib import types_pb2 as proto_types
 
 class TestPing(common.KeepKeyTest):
 
+    def test_protected_ping_preserves_message_presence_after_debug_read(self):
+        self.requires_firmware("7.14.3")
+        for message in (None, '', 'ping response'):
+            with self.subTest(message=message):
+                request = proto.Ping(button_protection=True)
+                if message is not None:
+                    request.message = message
+                response = self.client.call_raw(request)
+                self.assertIsInstance(response, proto.ButtonRequest)
+                # Read the screen while the normal response is suspended.
+                self.client.debug.read_layout()
+                self.client.debug.press_yes()
+                response = self.client.call_raw(proto.ButtonAck())
+                self.assertIsInstance(response, proto.Success)
+                self.assertEqual(response.HasField('message'), message is not None)
+                if message is not None:
+                    self.assertEqual(response.message, message)
+
+
     def test_ping(self):
         self.setup_mnemonic_pin_passphrase()
         self.client.clear_session()
