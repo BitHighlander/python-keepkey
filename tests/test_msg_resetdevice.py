@@ -235,12 +235,17 @@ class TestDeviceReset(common.KeepKeyTest):
 
         mnemonic = []
         while isinstance(resp, proto.ButtonRequest):
-            mnemonic.append(self.client.debug.read_reset_word())
+            words = self.client.debug.read_reset_word()
+            # Debug subpages repeat their logical word group, as in the
+            # normal reset collector above. Keep the final seed assertion.
+            if not mnemonic or mnemonic[-1] != words:
+                mnemonic.append(words)
             self.client.debug.press_yes()
             resp = self.client.call_raw(proto.ButtonAck())
 
         self.assertIsInstance(resp, proto.Success)
         self.assertEqual(' '.join(mnemonic), expected_mnemonic)
+        self.assertEqual(strength // 32 * 3, len(' '.join(mnemonic).split()))
 
     def test_reset_reentry_disarms_entropy_ack(self):
         """An abandoned reset must never leave EntropyAck armed.
