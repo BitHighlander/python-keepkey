@@ -577,6 +577,20 @@ class Emulator(object):
         with open(self.img, "r+b") as f:
             f.seek(off + rel)
             f.write(data)
+            # These edits construct alternate-version fixtures, not corrupt
+            # records. Preserve the optional durable-commit envelope so boot
+            # reaches the version reader rather than rejecting a stale CRC.
+            f.seek(off)
+            record = f.read(2580)
+            if record[2572:2576] == b"crc1":
+                crc = 0xffffffff
+                for (word,) in struct.iter_unpack("<I", record[:2572]):
+                    crc ^= word
+                    for _ in range(32):
+                        crc = ((crc << 1) ^ (0x04c11db7 if crc & 0x80000000
+                                             else 0)) & 0xffffffff
+                f.seek(off + 2576)
+                f.write(struct.pack("<I", crc))
             f.flush()
             os.fsync(f.fileno())
 
@@ -1110,8 +1124,18 @@ class TestStorageUpgradePreservation(unittest.TestCase):
         derive if the wrapped storage key unwrapped, the 512-byte V16
         ciphertext decrypted, and the seed came back byte-identical.
         """
+        self._check_v16_upgrade()
+
+    def test_unframed_v16_blob_upgrades_without_wiping(self):
+        """Legacy V16 without the optional CRC envelope preserves its wallet."""
+        self._check_v16_upgrade(unframed=True)
+
+    def _check_v16_upgrade(self, unframed=False):
         addr, off = self._create_wallet()
         self._make_v16_blob(off)
+        if unframed:
+            self.emu.patch(off, 41, b"\x00" * 3)
+            self.emu.patch(off, 2572, b"\xff" * 8)
         self.assertEqual(16, self.emu.read_u32(off, OFF_VERSION))
 
         before = self.emu.image()
@@ -1145,7 +1169,7 @@ class TestStorageUpgradePreservation(unittest.TestCase):
             c.close()
 
     def test_unrecognised_version_wipes_on_boot(self):
-        """A downgrade wipes, deliberately -- do not "fix" this.
+        """Unknown full-product versions wipe; Bitcoin-only bands stay intact.
 
         A device that has run newer firmware carries a newer stamp. Older
         firmware cannot read it, so version_from_int() returns
@@ -1161,6 +1185,7 @@ class TestStorageUpgradePreservation(unittest.TestCase):
         addr, off = self._create_wallet()
         unknown = self.emu.read_u32(off, OFF_VERSION) + 1
         self.emu.write_u32(off, OFF_VERSION, unknown)
+        before = self.emu.image()
 
         self.emu.boot()
         c = self.emu.client(self.method)
@@ -1174,6 +1199,12 @@ class TestStorageUpgradePreservation(unittest.TestCase):
                 "an older signed image would keep the seed." % unknown)
             self.assertFalse(c.features.pin_protection)
             self.assertNotEqual(LABEL, c.features.label)
+            # Unknown versions in the Bitcoin-only band are refused without
+            # erasing the wallet; full firmware uses its existing wipe policy.
+            if self.bitcoin_only:
+                self.assertEqual(before, self.emu.image())
+            else:
+                self.assertNotEqual(before, self.emu.image())
         finally:
             c.close()
 
@@ -1215,10 +1246,10 @@ class TestStorageUpgradePreservation(unittest.TestCase):
             self.emu.read_u32(off, OFF_VERSION), STORAGE_VERSION_BTC_ONLY_BASE,
             "this emulator already stamps its wallets into the bitcoin-only "
             "band, so it is not the multi-chain firmware this test is about")
-        before = self.emu.sector(off)
         self.emu.write_u32(
             off, OFF_VERSION,
             STORAGE_VERSION_BTC_ONLY_BASE + self.emu.read_u32(off, OFF_VERSION))
+        before = self.emu.image()
 
         self.emu.boot()
         c = self.emu.client(self.method)
@@ -1233,10 +1264,9 @@ class TestStorageUpgradePreservation(unittest.TestCase):
             c.close()
         self.emu.halt()
 
-        after = self.emu.sector(off)
+        after = self.emu.image()
         self.assertEqual(
-            before[:OFF_VERSION] + before[OFF_VERSION + 4:],
-            after[:OFF_VERSION] + after[OFF_VERSION + 4:],
+            before, after,
             "the locked boot MODIFIED the bitcoin-only record. The wallet is "
             "supposed to stay recoverable by reflashing bitcoin-only firmware")
 
