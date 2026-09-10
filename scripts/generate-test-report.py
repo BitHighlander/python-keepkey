@@ -3288,8 +3288,14 @@ def screenshot_test_list(fw_version):
 # version-blind set would fail every older-firmware run for a module that
 # legitimately cannot exist yet.
 MUST_RUN_MODULES = {
-    'test_msg_signtx_taproot': '7.0.0',
-    'test_msg_getaddress_taproot': '7.0.0',
+    # Taproot did not exist at 7.0.0. That floor only ever held because this
+    # table was applied to products that happen to carry taproot: 7.14.2
+    # reports no supports_taproot and has no P2TR path in signing.c at all, so
+    # requiring its six taproot cases to run demanded coverage the product
+    # cannot have. The floor is the release taproot actually ships in, which
+    # keeps the requirement binding on 7.14.3 and 7.15, both of which carry it.
+    'test_msg_signtx_taproot': '7.14.3',
+    'test_msg_getaddress_taproot': '7.14.3',
     # R-4.1. Gated on requires_message('LoadClearsignSigner'), so if provider
     # loading regressed, all four would skip and the report would certify a
     # feature it never exercised.
