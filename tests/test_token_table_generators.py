@@ -23,6 +23,7 @@ policy and moves.
 """
 
 import ast
+import importlib
 import os
 import re
 import subprocess
@@ -57,6 +58,19 @@ def _vetted_source_present():
 
 
 class TestTokenTableGenerators(unittest.TestCase):
+
+    def test_ethereum_tokens_missing_source_fails_closed(self):
+        """A non-recursive checkout must stop the firmware build, not emit 0 rows."""
+        module = importlib.import_module('keepkeylib.eth.ethereum_tokens')
+        original_here = module.HERE
+        with tempfile.TemporaryDirectory() as tmp:
+            module.HERE = tmp
+            try:
+                with self.assertRaisesRegex(
+                        RuntimeError, 'ethereum-lists token source is missing'):
+                    module.ETHTokenTable().build()
+            finally:
+                module.HERE = original_here
 
     def _run(self, script):
         """Run one generator into a temp file and return its rows."""
