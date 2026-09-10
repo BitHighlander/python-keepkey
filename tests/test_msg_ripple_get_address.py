@@ -41,7 +41,10 @@ class TestMsgRippleGetAddress(KeepKeyTest):
         self.setup_mnemonic_allallall()
         address = self.client.ripple_get_address(
             parse_path("m/44'/144'/0'/0/0"), show_display=True)
-        if self.firmware_at_least("7.14.3"):
+        # 7.14.2 and later preserve the response across DebugLinkGetState
+        # requests made during screenshot capture; the same fix is on all three
+        # products, so the floor is the release the fix first shipped in.
+        if self.firmware_at_least("7.14.2"):
             self.assertEqual(address, "rNaqKtKrMSwpwZSzRckPf7S96DkimjkF4H")
 
     def test_ripple_get_address_other(self):

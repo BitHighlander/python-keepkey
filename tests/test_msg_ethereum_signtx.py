@@ -442,9 +442,8 @@ class TestMsgEthereumSigntx(common.KeepKeyTest):
         sibling tests in this file all now pass chain_id explicitly so they
         keep exercising their own subject rather than this one.
         """
-        # Explicit zero was already rejected on RC18, but an omitted field was
-        # not. The absent-field fix landed after RC18 and first ships in 7.16.
-        self.requires_firmware("7.16.0")
+        # Canonical 7.15 rejects omitted chain IDs as well as explicit zero.
+        self.requires_firmware("7.15.0")
         self.requires_fullFeature()
         self.setup_mnemonic_nopin_nopassphrase()
         self.client.apply_policy("AdvancedMode", 1)

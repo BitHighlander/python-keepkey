@@ -28,7 +28,7 @@ from keepkeylib import types_pb2 as proto_types
 class TestPing(common.KeepKeyTest):
 
     def test_protected_ping_preserves_message_presence_after_debug_read(self):
-        self.requires_firmware("7.14.3")
+        self.requires_firmware("7.14.2")
         for message in (None, '', 'ping response'):
             with self.subTest(message=message):
                 request = proto.Ping(button_protection=True)
