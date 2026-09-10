@@ -317,14 +317,12 @@ class TestDeviceReset(common.KeepKeyTest):
     def test_reset_device_pin(self):
         external_entropy = b'zlutoucky kun upel divoke ody' * 2
         strength = 128
-        # Whether the Internal Entropy screen appears is NOT monotonic in
-        # version, so no floor expresses it. 7.14.2 refuses the legacy
-        # display_random request outright (reset.c: "(void)display_random"),
-        # 7.14.3 still honours it for already-shipped 7.14-line hosts and
-        # renders all 32 bytes of int_entropy, and 7.15 removes the screen
-        # again. Only the 7.14.3 band shows it.
-        shows_entropy_screen = (self.firmware_at_least("7.14.3")
-                                and not self.firmware_at_least("7.15.0"))
+        # display_random is ignored by every supported product. 7.14.2 always
+        # did; 7.14.3 and 7.15 now do too. The request below deliberately sets
+        # it to True so this test fails if any firmware starts honouring it
+        # again: the device half it would render is the exact 32 bytes whose
+        # complement this host supplies, so the screen plus our own
+        # external_entropy is the seed pre-image.
 
         ret = self.client.call_raw(proto.ResetDevice(display_random=True,
                                                strength=strength,
@@ -333,19 +331,10 @@ class TestDeviceReset(common.KeepKeyTest):
                                                language='english',
                                                label='test'))
 
-        # display_random=True above is deliberate: the field stays in the wire
-        # schema for host compatibility. Firmware that refuses it does so
-        # because internal entropy is seed
-        # pre-image material, and a host that sets the flag and reads that
-        # screen once can compute SHA256(shown || ext) and derive the seed.
-        #
-        # Branch on the version rather than skipping the test: everything below
-        # (PIN entry, EntropyRequest/Ack, mnemonic derivation) is version-
-        # independent and must keep running on older firmware.
-        if shows_entropy_screen:
-            self.assertIsInstance(ret, proto.ButtonRequest)
-            self.client.debug.press_yes()
-            ret = self.client.call_raw(proto.ButtonAck())
+        self.assertNotIsInstance(
+            ret, proto.ButtonRequest,
+            'display_random must be ignored: firmware answered the reset with a '
+            'ButtonRequest, which means an internal-entropy screen was drawn')
         self.assertIsInstance(ret, proto.PinMatrixRequest)
         self.client._capture_oled_after_animation(1.05, (192, 256, 0, 64))
 
@@ -415,14 +404,12 @@ class TestDeviceReset(common.KeepKeyTest):
     def test_failed_pin(self):
         external_entropy = 'zlutoucky kun upel divoke ody' * 2
         strength = 128
-        # Whether the Internal Entropy screen appears is NOT monotonic in
-        # version, so no floor expresses it. 7.14.2 refuses the legacy
-        # display_random request outright (reset.c: "(void)display_random"),
-        # 7.14.3 still honours it for already-shipped 7.14-line hosts and
-        # renders all 32 bytes of int_entropy, and 7.15 removes the screen
-        # again. Only the 7.14.3 band shows it.
-        shows_entropy_screen = (self.firmware_at_least("7.14.3")
-                                and not self.firmware_at_least("7.15.0"))
+        # display_random is ignored by every supported product. 7.14.2 always
+        # did; 7.14.3 and 7.15 now do too. The request below deliberately sets
+        # it to True so this test fails if any firmware starts honouring it
+        # again: the device half it would render is the exact 32 bytes whose
+        # complement this host supplies, so the screen plus our own
+        # external_entropy is the seed pre-image.
 
         ret = self.client.call_raw(proto.ResetDevice(display_random=True,
                                                strength=strength,
@@ -431,19 +418,10 @@ class TestDeviceReset(common.KeepKeyTest):
                                                language='english',
                                                label='test'))
 
-        # display_random=True above is deliberate: the field stays in the wire
-        # schema for host compatibility. Firmware that refuses it does so
-        # because internal entropy is seed
-        # pre-image material, and a host that sets the flag and reads that
-        # screen once can compute SHA256(shown || ext) and derive the seed.
-        #
-        # Branch on the version rather than skipping the test: everything below
-        # (PIN entry, EntropyRequest/Ack, mnemonic derivation) is version-
-        # independent and must keep running on older firmware.
-        if shows_entropy_screen:
-            self.assertIsInstance(ret, proto.ButtonRequest)
-            self.client.debug.press_yes()
-            ret = self.client.call_raw(proto.ButtonAck())
+        self.assertNotIsInstance(
+            ret, proto.ButtonRequest,
+            'display_random must be ignored: firmware answered the reset with a '
+            'ButtonRequest, which means an internal-entropy screen was drawn')
         self.assertIsInstance(ret, proto.PinMatrixRequest)
         self.client._capture_oled_after_animation(1.05, (192, 256, 0, 64))
 
