@@ -136,7 +136,7 @@ jobs:
           # integration-btc job) and the Ironwood known-answer vectors. So this
           # job validates 7.16.0; it does not validate the RC18 dependency
           # graph. Bump deliberately, and re-read that claim when you do.
-          ref: 9ef6966162c69ec5c407af35031466354b539bdd
+          ref: 7e8e43153428965d064b4609040ba779cea7535e
 
           path: keepkey-firmware
 
@@ -561,7 +561,7 @@ jobs:
             firmware_ref: af979cd5099349ba58ec10d1b7eedeb67662c602
             min_fw: "7.15.0"
           - release: "7.16-alpha"
-            firmware_ref: 9ef6966162c69ec5c407af35031466354b539bdd
+            firmware_ref: 7e8e43153428965d064b4609040ba779cea7535e
             min_fw: "7.16.0"
 
     # KK_BITCOIN_ONLY=ON is a second shipping product, not a build flavour:
