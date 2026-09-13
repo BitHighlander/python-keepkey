@@ -136,7 +136,7 @@ jobs:
           # integration-btc job) and the Ironwood known-answer vectors. So this
           # job validates 7.16.0; it does not validate the RC18 dependency
           # graph. Bump deliberately, and re-read that claim when you do.
-          ref: cc8df6a67e608e7b272639f7343c3834c736c53c
+          ref: 9ef6966162c69ec5c407af35031466354b539bdd
 
           path: keepkey-firmware
 
@@ -374,7 +374,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: BitHighlander/keepkey-firmware
-          ref: e6a6711e5e4164d3b3840356dc301aa873f1fbf7
+          ref: f23557f33eee8dda6c7ec475499ce4e5dcafb506
           path: keepkey-firmware
 
       - name: Init the submodules the emulator build needs
@@ -555,13 +555,13 @@ jobs:
       matrix:
         include:
           - release: "7.14.3"
-            firmware_ref: e6a6711e5e4164d3b3840356dc301aa873f1fbf7
+            firmware_ref: f23557f33eee8dda6c7ec475499ce4e5dcafb506
             min_fw: "7.14.3"
           - release: "7.15"
-            firmware_ref: d0a494a805533f02387f58d89dbb6f1fb09a621a
+            firmware_ref: af979cd5099349ba58ec10d1b7eedeb67662c602
             min_fw: "7.15.0"
           - release: "7.16-alpha"
-            firmware_ref: cc8df6a67e608e7b272639f7343c3834c736c53c
+            firmware_ref: 9ef6966162c69ec5c407af35031466354b539bdd
             min_fw: "7.16.0"
 
     # KK_BITCOIN_ONLY=ON is a second shipping product, not a build flavour:
