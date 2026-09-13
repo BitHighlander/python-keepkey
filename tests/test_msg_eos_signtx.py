@@ -580,6 +580,7 @@ class TestMsgEosSignTx(common.KeepKeyTest):
                     else "fb936ef1be4bda680d93bd10b6d062357d8dd7272038a706dc0d61a91f39c5ee")
         self.assertEqual(binascii.hexlify(res.hash), expected)
 
+
     def test_deleteauth(self):
         self.requires_fullFeature()
         self.setup_mnemonic_nopin_nopassphrase()
