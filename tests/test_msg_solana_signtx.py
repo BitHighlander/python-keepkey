@@ -135,9 +135,11 @@ class TestMsgSolanaSignTx(common.KeepKeyTest):
         self.client.apply_policy('AdvancedMode', False)
 
     def test_solana_sign_message_blocked_without_advanced_mode(self):
-        """Solana message signing BLOCKED without AdvancedMode.
+        """Non-text Solana message signing BLOCKED without AdvancedMode.
         Without domain separation, a signed message is indistinguishable from
-        a signed transaction. Device refuses to sign without explicit opt-in."""
+        a signed transaction. Device refuses to sign without explicit opt-in.
+        The payload is binary (a legacy tx-message header) so this holds on
+        every firmware, including those that allow plain text."""
         self.requires_firmware("7.14.0")
         self.requires_fullFeature()
         self.requires_message("SolanaSignMessage")
@@ -147,9 +149,29 @@ class TestMsgSolanaSignTx(common.KeepKeyTest):
         with pytest.raises(CallException) as exc:
             self.client.call(messages.SolanaSignMessage(
                 address_n=parse_path("m/44'/501'/0'/0'"),
-                message=b"Hello Solana!",
+                message=b"\x01\x00\x01\x02" + b"\x00" * 64,
             ))
         self.assertIn("disabled by policy", str(exc.value))
+
+    def test_solana_sign_plain_text_message_without_advanced_mode(self):
+        """Plain-text login messages (SIWS / dApp sign-in) sign WITHOUT
+        AdvancedMode. Printable text that never contains the signer's key
+        cannot authorize a transaction: a tx signature only verifies when the
+        signer's key is in the message's account keys."""
+        self.requires_firmware("7.16.0")
+        self.requires_fullFeature()
+        self.requires_message("SolanaSignMessage")
+        self.setup_mnemonic_allallall()
+        self.client.apply_policy('AdvancedMode', False)
+
+        text = (b"example.com wants you to sign in with your Solana account:\n"
+                b"Sign in to Example.\n\nNonce: 9d9972a1f2ed0aaa")
+        resp = self.client.call(messages.SolanaSignMessage(
+            address_n=parse_path("m/44'/501'/0'/0'"),
+            message=text,
+        ))
+        self.assertEqual(len(resp.signature), 64)
+        self.assertEqual(len(resp.public_key), 32)
 
     def test_solana_sign_empty_rejected(self):
         """Test that empty raw_tx is rejected."""
@@ -266,15 +288,17 @@ class TestMsgSolanaSignTx(common.KeepKeyTest):
         """Unchecked SPL Transfer has no signed mint (the token being moved is
         not provable), so it now requires AdvancedMode (blind-sign); only the
         TransferChecked variant clear-signs."""
-        self.requires_firmware("7.15.0")  # unchecked-SPL AdvancedMode gating landed in 7.15
         self.requires_fullFeature()
+        self.requires_firmware("7.14.2")
         self.setup_mnemonic_allallall()
         from keepkeylib.client import CallException
         from_pubkey = self._get_from_pubkey()
         to_account = b'\x33' * 32  # destination token account
         # SPL Token Transfer instruction: opcode=3 (u8) + amount (LE u64)
         instr_data = bytes([3]) + struct.pack('<Q', 50000000)  # 50M tokens
-        raw_tx = self._build_tx(from_pubkey, [to_account], self.TOKEN_PROGRAM, instr_data)
+        raw_tx = self._build_tx(
+            from_pubkey, [to_account, from_pubkey], self.TOKEN_PROGRAM,
+            instr_data)
         tx = messages.SolanaSignTx(
             address_n=parse_path("m/44'/501'/0'/0'"), raw_tx=raw_tx)
 
@@ -290,15 +314,17 @@ class TestMsgSolanaSignTx(common.KeepKeyTest):
     def test_solana_sign_token_approve(self):
         """Unchecked SPL Approve hides the delegated token's mint, so it now
         requires AdvancedMode (blind-sign)."""
-        self.requires_firmware("7.15.0")  # unchecked-SPL AdvancedMode gating landed in 7.15
         self.requires_fullFeature()
+        self.requires_firmware("7.14.2")
         self.setup_mnemonic_allallall()
         from keepkeylib.client import CallException
         from_pubkey = self._get_from_pubkey()
         delegate = b'\x44' * 32
         # SPL Token Approve: opcode=4 (u8) + amount (LE u64)
         instr_data = bytes([4]) + struct.pack('<Q', 100000000)
-        raw_tx = self._build_tx(from_pubkey, [delegate], self.TOKEN_PROGRAM, instr_data)
+        raw_tx = self._build_tx(
+            from_pubkey, [delegate, from_pubkey], self.TOKEN_PROGRAM,
+            instr_data)
         tx = messages.SolanaSignTx(
             address_n=parse_path("m/44'/501'/0'/0'"), raw_tx=raw_tx)
 
@@ -667,9 +693,16 @@ class TestMsgSolanaSignTx(common.KeepKeyTest):
             0x7c, 0xa6, 0x02, 0x03, 0x45, 0x2f, 0x5d, 0x61,
         ])
 
-        # SPL Token Transfer instruction: opcode=3 (u8) + amount (LE u64)
-        instr_data = bytes([3]) + struct.pack('<Q', 1000000)  # 1.0 USDC (6 decimals)
-        raw_tx = self._build_tx(from_pubkey, [to_account], self.TOKEN_PROGRAM, instr_data)
+        # Unchecked Transfer (op 3) signs source, destination and authority but
+        # carries neither mint nor decimals.  Host token_info must not promote
+        # that unauthenticated identity into a clear-signed transfer.
+        instr_data = bytes([3]) + struct.pack('<Q', 1000000)
+        raw_tx = self._build_tx(
+            from_pubkey,
+            [to_account, from_pubkey],
+            self.TOKEN_PROGRAM,
+            instr_data,
+        )
 
         token_info = messages.SolanaTokenInfo(
             mint=usdc_mint,

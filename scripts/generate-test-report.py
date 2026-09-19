@@ -216,6 +216,22 @@ def ver_t(s):
     parts = (s.split('.') + ['0', '0', '0'])[:3]
     return tuple(int(''.join(ch for ch in p if ch.isdigit()) or '0') for p in parts)
 def ver_ge(a, b): return ver_t(a) >= ver_t(b)
+
+# Tests whose newer fail-closed behavior deliberately returns before drawing a
+# confirmation screen. Keep their historical catalog text, but do not schedule
+# or audit an OLED capture once the refusal behavior is active.
+_NO_SCREEN_FROM = {
+    ('test_msg_signtx_ethereum_erc20', 'test_approve_all'): '7.14.2',
+}
+
+
+def _screens_for(fw_version, mod, meth, screens):
+    floor = _NO_SCREEN_FROM.get((mod, meth))
+    if floor and ver_ge(fw_version, floor):
+        return []
+    return screens
+
+
 def _w(text, n=95):
     words, lines, cur = text.split(), [], ''
     for w in words:
@@ -343,7 +359,7 @@ def detect_fw():
 # Census of everything the merged JUnit actually contained, so the report can
 # state how much of the run it covers.  Without this the PDF silently implies
 # that its catalog IS the test suite -- an RC audit read "no dice in the report"
-# as "dice is untested" when test_reset_device_dice had in fact run green.
+# as "dice is untested" when the dice reset test had in fact run green.
 JUNIT_CENSUS = {'ran': 0, 'skipped': 0, 'native': 0}
 
 
@@ -792,7 +808,7 @@ SECTIONS = [
           ['Wordlist rejection warning']),
      ]),
 
-    ('K', 'Seed Generation Hardening (7.15)', '7.15.0',
+    ('K', 'Seed Generation Hardening (7.14.3+)', '7.14.3',
      'The 7.15 changes to how a seed comes into existence: user-supplied dice entropy folded in '
      'on-device, and the PIN key-derivation rewrap. These ran green from the first 7.15 RC but '
      'appeared nowhere in this report, because the catalog could not reference native firmware '
@@ -809,14 +825,45 @@ SECTIONS = [
          'PIN KDF: a v16 storage blob must still unlock and then rewrap to v19, or the upgrade bricks.',
      ],
      [
-         ('K1', 'test_msg_resetdevice', 'test_reset_device_dice',
-          'Dice entropy end-to-end',
-          'Drives the full on-device dice flow over DebugLink: 99 rolls injected in chunks with undo '
-          'exercised, extras past the cap dropped. Asserts the device-computed digest equals '
-          'SHA256 of exactly the expected roll string, then derives the mnemonic from the post-mix '
-          'internal entropy and compares -- which is what proves the rolls actually reached the seed '
-          'rather than being collected and discarded.',
-          ['Dice entry screen', 'Digest confirmation']),
+         ('K1', 'test_msg_resetdevice', 'test_reset_device_dice_mixed_is_verifiable',
+          'Dice + device entropy, verified offline',
+          'Host selects MIXED (dice_entropy alone). The device shows the consent screen naming the '
+          'mode, then its own 32-byte draw as 24 BIP-39 words BEFORE any roll, then collects 99 rolls '
+          'over DebugLink with undo exercised. The test decodes the 24 words with its own '
+          'checksum-verified BIP-39 decoder, recomputes '
+          'seed = SHA256d(tag || draw || SHA256(tag || rolls)) from the published formula -- with the '
+          'host\'s EntropyAck bytes nowhere in it -- and requires the backup words to match. That is '
+          'the proof a user can repeat with tools/verify_dice_seed.py: the rolls reached the seed, '
+          'the device draw was the one it committed to, and the host contributed nothing.',
+          ['Mode consent', 'Dice entry screen', 'Digest confirmation']),
+         ('K1b', 'test_msg_resetdevice', 'test_reset_device_dice_only_is_verifiable',
+          'Dice only, verified offline',
+          'Host selects DICE ONLY (dice_entropy + dice_only), 50 rolls for a 12-word seed. No device '
+          'words are shown -- the rolls are the entire derivation -- and the test requires the backup '
+          'words to equal BIP39(SHA256(rolls)) while sending a nonzero EntropyAck that must be '
+          'ignored. Byte-identical to Coldcard\'s Dice-Rolls-Only.',
+          ['Mode consent', 'Dice entry screen', 'Digest confirmation']),
+         ('K1c', 'test_msg_resetdevice', 'test_reset_device_dice_rejects_biased_rolls',
+          'Loaded die is refused',
+          'Fifty ones -- one face on 100% of the rolls. Refused with SyntaxError before any digest '
+          'is drawn, per Coldcard\'s 30%-per-face rule, so a biased die never becomes a wallet.',
+          []),
+         ('K1d', 'test_msg_resetdevice', 'test_reset_device_dice_only_requires_dice_entropy',
+          'dice_only without dice_entropy is refused',
+          'The rolls-only derivation is a modifier of the dice ceremony, not a ceremony of its own; '
+          'the request is refused before any screen.',
+          []),
+         ('K1e', 'test_msg_resetdevice', 'test_reset_device_dice_refuses_no_backup',
+          'Dice with no_backup is refused',
+          'The dice modes exist to be checked against the backup words. A reset that never shows '
+          'them has nothing to verify and would put seed material on the screen under a WARNING '
+          'that recovery is impossible; refused before any screen.',
+          []),
+         ('K1f', 'test_msg_resetdevice', 'test_reset_device_dice_consent_cancel_aborts',
+          'Cancel at the consent screen aborts everything',
+          'The consent screen\'s only "no" is the host\'s Cancel. Asserts ActionCancelled, that a '
+          'subsequent EntropyAck finds no armed ceremony, and that the device is still uninitialized.',
+          []),
          ('K2', 'test_msg_resetdevice', 'test_reset_reentry_disarms_entropy_ack',
           'Aborted reset disarms EntropyAck',
           'Regression for a host-chosen-seed hole: reset_init aborts left awaiting_entropy set from '
@@ -829,24 +876,47 @@ SECTIONS = [
           'd6 carries log2(6)=2.585 bits, so 128/192/256-bit seeds need 50/75/99 rolls '
           '(the Coldcard convention). A short count would silently weaken the seed.',
           []),
-         ('K4', 'Dice', 'MixZeroEntropyVector',
-          'Mix known-answer vector (zero entropy)',
-          'SHA256(0x00*32 || "123456") against a hardcoded digest. Pins the mix construction so a '
-          'refactor cannot quietly change how dice enter the seed.',
+         ('K4', 'Dice', 'DeriveOnlyIsPlainSha256OfRolls',
+          'DICE ONLY known-answer vector',
+          'seed = SHA256("123456") against a digest computed in Python from the published formula, '
+          'not captured from this code. Pins the derivation to Coldcard\'s Dice-Rolls-Only byte '
+          'for byte, so a refactor cannot quietly change what a user must recompute offline.',
           []),
-         ('K5', 'Dice', 'MixNonZeroEntropyVector',
-          'Mix known-answer vector (non-zero entropy)',
-          'Same construction with a non-zero starting entropy buffer, pinned to a hardcoded digest.',
+         ('K5', 'Dice', 'DeriveMixedVector',
+          'MIXED known-answer vector',
+          'seed = SHA256d("KK\\x01SM" || 0x00..0x1f || SHA256("KK\\x01D" || "654321165243")) against a '
+          'Python-computed digest. Pins the tag bytes, hash order and double-SHA of the mixed '
+          'derivation -- the exact formula tools/verify_dice_seed.py implements.',
           []),
-         ('K6', 'Dice', 'MixDependsOnRolls',
-          'Different rolls produce different entropy',
-          'Two mixes differing only in the final roll must diverge. Catches a mix that ignores its '
-          'roll argument -- the failure mode where dice appear to work and contribute nothing.',
+         ('K5b', 'Dice', 'DeriveMixedZeroDeviceVector',
+          'MIXED known-answer vector (zero device draw)',
+          'Same construction with an all-zero device draw, pinned to a Python-computed digest.',
           []),
-         ('K7', 'Dice', 'MixUsesExactCount',
+         ('K5c', 'Dice', 'DeriveMixedAliasesInPlace',
+          'MIXED derives safely into its own input buffer',
+          'reset.c derives into the buffer the device draw lives in. In-place and separate-output '
+          'results must be identical, or the aliasing would corrupt the seed.',
+          []),
+         ('K6', 'Dice', 'DeriveMixedDiffersFromUntaggedMix',
+          'Tagged derivation cannot collide with the old formula',
+          'The MIXED seed for zero draw and "123456" must differ from SHA256(draw || rolls), the '
+          'derivation earlier firmware used, so a wallet is never silently re-derived under the '
+          'wrong formula.',
+          []),
+         ('K7', 'Dice', 'DeriveOnlyUsesExactCount',
           'Only the counted rolls contribute',
           'Bytes past the declared roll count must not affect the result, so uninitialized tail '
           'bytes of the roll buffer can never leak into seed material.',
+          []),
+         ('K7b', 'Dice', 'BiasGateIsThirtyPercentPerFace',
+          'Loaded-die gate threshold',
+          'Coldcard\'s rule: any face over 30% of the rolls is refused. 30/99 fails, 29/99 passes; '
+          '16/50 fails, 15/50 (exactly 30%) passes.',
+          []),
+         ('K7c', 'Dice', 'BiasGateRejectsNonDiceBytes',
+          'Non-d6 bytes are refused',
+          'A byte outside \'1\'-\'6\' anywhere inside the counted rolls is refused regardless of the '
+          'distribution of the rest.',
           []),
          ('K8', 'Storage', 'PinKdfRewrapsToActiveVersionAfterCorrectPin',
           'Correct PIN unlocks and rewraps to the ACTIVE KDF',
@@ -1102,7 +1172,8 @@ SECTIONS = [
           ['Approval screen']),
          ('E11', 'test_msg_signtx_ethereum_erc20', 'test_approve_all',
           'ERC-20 approve unlimited',
-          'MAX_UINT256 approval. Device shows "UNLIMITED" warning since this grants infinite spending.',
+          'MAX_UINT256 approval. Older firmware showed an "UNLIMITED" warning; 7.14.2 and later '
+          'refuse it before drawing a confirmation screen.',
           ['Unlimited approval warning']),
          ('E12', 'test_msg_ethereum_makerdao', 'test_generate',
           'MakerDAO generate DAI', 'Complex DeFi contract interaction (MakerDAO CDP).', []),
@@ -1138,11 +1209,11 @@ SECTIONS = [
           'Failure on the wire.',
           []),
          ('E17', 'test_msg_ethereum_erc20_uniswap_liquidity', 'test_sign_uni_approve_liquidity_ETH',
-          'Uniswap V2 LP-token approval',
-          'Approves the Uniswap V2 FOX/WETH LP token for the canonical router. The exact pool '
-          'identity and full-LP allowance are shown before the generic fee review, and the fixed '
-          'signature proves the reviewed transaction bytes are the bytes signed.',
-          ['Full LP allowance', 'LP token and pool address', 'Fee and final approval']),
+          'Uniswap V2 unlimited LP-token approval refused',
+          'Enables AdvancedMode, then attempts an unlimited FOX/WETH LP-token approval. '
+          'The device refuses it with Failure_ActionCancelled and the explicit disabled-approval '
+          'reason before any signing consent. The refusal itself is checked on the wire.',
+          ['Enable Policy: AdvancedMode']),
          ('E18', 'test_msg_ethereum_erc20_uniswap_liquidity', 'test_sign_uni_add_liquidity_ETH',
           'Uniswap V2 add liquidity ETH+token',
           'Clear-signs both desired/minimum FOX and ETH amounts, the signed recipient, and the '
@@ -1863,11 +1934,10 @@ SECTIONS = [
           # visual proof and is not. The per-beneficiary confirm screens are
           # captured by G35, which actually signs a two-beneficiary payout.
           []),
-         ('G37', 'test_msg_hive', 'test_hive_sign_ops_account_update2_rejects_authority_change',
-          'account_update2 cannot rotate keys',
-          'Only the profile-metadata form is in the table. Any owner/active/posting/memo_key '
-          'field present is a hard reject — the op-9/10 device-derived-keys invariant applied '
-          'field-level.',
+         ('G37', 'test_msg_hive', 'test_hive_sign_ops_account_update2_is_rejected',
+          'account_update2 is refused',
+          'Any owner/active/posting authority or memo_key present is a hard reject, so a key '
+          'change is never summarized as a profile-only update.',
           []),
          ('G38', 'test_msg_hive', 'test_hive_sign_ops_truncated_bodies_rejected',
           'Truncated op bodies refused',
@@ -2012,7 +2082,8 @@ SECTIONS = [
          # KKSOLSW1 -- the answer to S24. A v0 tx whose accounts live in a
          # lookup table cannot be resolved on-device, so today the device signs
          # accounts it never showed. These four are the additive invariant
-         # (section F) restated for Solana, and R-4.1 of SRS-7.15.
+         # (section F) restated for Solana, and R-4.1 of SRS-7.15. The
+         # canonical 7.15 product includes this protocol work.
          ('S26', 'test_msg_solana_lut_attestation',
           'test_attested_accounts_are_shown_and_blind_sign_still_follows',
           'Attested lookup-table accounts are shown, and the blind-sign warning survives',
@@ -2048,7 +2119,7 @@ SECTIONS = [
           'With no signer loaded a well-formed attestation is inert',
           'Trust is opt-in and per-session. A perfectly valid attestation from a provider the '
           'user never loaded verifies against nothing and renders nothing, which is the '
-          'property that keeps 7.15 safe without any key-management programme.',
+          'property that keeps sessions without a loaded provider safe.',
           []),
      ]),
 
@@ -2545,7 +2616,6 @@ SECTIONS = [
           'again. MALFORMED is the assertion: the signer itself is gone.',
           ['Enable Policy: AdvancedMode',
            "Load Clearsigner: Trust 'CI Test' (fingerprint) ... NOT verified by KeepKey",
-           'Home screen at the refusal - the AdvancedMode gate draws no screen of its own',
            'Enable Policy: AdvancedMode (re-armed to isolate the slot)']),
          ('I5', 'test_msg_session_trust_lifetime', 'test_signer_dropped_by_power_cycle',
           'Reboot drops the loaded signer',
@@ -2575,7 +2645,6 @@ SECTIONS = [
           ['Enable Policy: AdvancedMode',
            "Load Clearsigner: Trust 'CI Test' (fingerprint) ... NOT verified by KeepKey",
            'Disable Policy: AdvancedMode',
-           'Home screen at the refusal - the metadata message fails closed with no screen',
            'Enable Policy: AdvancedMode - the only confirm on re-arming, and the signer does NOT '
            'come back with it']),
      ]),
@@ -2897,6 +2966,180 @@ SECTIONS = [
           []),
      ]),
 
+    ('ER', 'ERC-7730 v2 Certified Clear-Signing Conformance', '7.19.0',
+     'ERC-7730 definitions are compiled into a bounded canonical program, authenticated by '
+     'KeepKey\'s certified delegation hierarchy, and interpreted against the exact calldata or '
+     'EIP-712 document being signed. The host supplies types, labels and formatting policy; it '
+     'never supplies authoritative decoded transaction values. A certified-definition failure '
+     'refuses signing and cannot silently downgrade to a less-specific certified display.',
+     [
+         'AUTHENTICATION AND REPLAY BOUNDARY:',
+         '- K773 envelope: version + purpose + canonical C773 program + sorted Merkle proof +',
+         '  139-byte KeepKey delegation certificate + compact secp256k1 signature.',
+         '- Purpose digest: SHA256("KEEPKEY:ERC7730:CATALOG\\0" || catalog_root).',
+         '- Definition id commits to the complete envelope; offset-zero replay is re-hashed before',
+         '  staged interpreter output becomes authoritative.',
+         '- Catalog lookup binds kind, chain, target and selector/typeHash. Unknown, ambiguous,',
+         '  reordered, oversized and recursively repeated definitions fail closed.',
+         '',
+         'CANONICAL PROGRAM AND DEVICE INTERPRETER:',
+         '- 179-byte header; sorted UTF-8 strings; canonical recursive ABI/EIP-712 node tree;',
+         '  typed structured/container/literal paths; typed literals and conditions;',
+         '  formatter, display, deployment/domain binding and resource sections.',
+         '- Recursive tuples and arrays through depth 12, 64 ABI nodes, 64 aggregate array',
+         '  elements, negative indices, half-open slices, nested array frames and separators.',
+         '- Display bytecode: intent, atomic interpolation fallback, fields, nested groups, arrays,',
+         '  embedded calls and explicit end; all forward/back links and depth are recomputed.',
+         '- Conditions: always, never, optional, empty/not-empty, in/not-in and must-match.',
+         '- Formatters: raw, native/token amounts, NFT, date, duration, unit, enum, chain, address',
+         '  name, ticker, ERC-7930 interoperable address, embedded calldata and encrypted fallback.',
+         '- Signed token/network records establish ticker, decimals and native currency. Live',
+         '  results may annotate but cannot replace a device-decoded value.',
+         '',
+         'REAL-WORLD AND EXHAUSTIVE EVIDENCE:',
+         '- Exact KeepKey SDK THORChain router deposit calldata, including vault, asset, amount and',
+         '  memo, is selector-bound and firmware-validated.',
+         '- Official Uniswap Router02 signed transaction and Permit2 typed-data fixtures bind the',
+         '  expected selector, target, chain, typeHash and domain constraints.',
+         '- Every one of 1,450 calldata formats exposed after bounded include expansion in the',
+         '  official ERC-7730 registry compiles and reaches the firmware catalog verifier.',
+         '- Deep ParaSwap Augustus multiSwap/megaSwap definitions exercise depths 9 and 11 while',
+         '  the compacted signing workflow remains exactly 4,096 bytes of fixed SRAM.',
+         '- The SDK/Vault consumer path accepts the same signed catalog on ethSignTransaction and',
+         '  from Relay/ShapeShift quote payloads, preserves it through swap construction, preloads',
+         '  the primary envelope, and answers device-driven definition requests in 1,024-byte',
+         '  chunks. Missing, malformed, mismatched, oversized and over-depth requests abort.',
+         '- Consumer evidence: hdwallet PR #3 passed build/lint and 8 focused catalog/policy tests;',
+         '  keepkey-vault PR #444 passed 59 focused REST schema and real Relay swap parser tests,',
+         '  Linux/macOS release builds and the packaged Intel macOS smoke test before merge.',
+         '- Device evidence: 133 focused firmware tests pass: ABI (5), streamed ABI (7), catalog',
+         '  (19), conditions (6), canonical EIP-712 (33), formatting (8), program readers (20),',
+         '  transaction continuation (3), and authenticated workflow execution (32).',
+         '- Host evidence: 25 focused python-keepkey tests pass for deterministic compilation,',
+         '  official-registry traversal, signed envelopes, request policy and protobuf transport.',
+         '',
+         'COMPLETE ACTIVE-V2 SUPPORT BREAKDOWN:',
+         '- Descriptor/context: schema-major enforcement; bounded includes and deterministic merge;',
+         '  owner/info/constants/maps/enums; canonical selector and EIP-712 encodeType/typeHash;',
+         '  exact chain/deployment/domain/contract/selector binding; unknown selectors refuse.',
+         '- ABI/value model: every legal int width; address/bool/bytesN/bytes/string; fixed and',
+         '  dynamic arrays; static/dynamic tuples; depth-12 recursion; negative index, full-array',
+         '  and bounded-slice paths; transaction, structured and literal containers.',
+         '- References: #/$/@ names, fields, groups, constants, maps, enums, tokens and networks are',
+         '  host-resolved to typed canonical ids; the device rechecks type, range and section links.',
+         '- Display: string/object intents, atomic interpolated intent fallback, ordered fields,',
+         '  recursive groups, authenticated array iteration and separators.',
+         '- Visibility/assertions: always, never, empty, not-empty, in, not-in and must-match;',
+         '  condition operands are captured from device-decoded calldata or streamed typed data.',
+         '- Formatting: raw integer/string/bytes/address; native/token amounts and thresholds; NFT;',
+         '  date, duration, unit, enum, chain id, trusted-name fallback, ticker and ERC-7930.',
+         '- Nested/special: embedded calldata requests a separately certified definition with a',
+         '  depth-4/cycle boundary; encrypted data never claims plaintext without verified proof;',
+         '  ERC-4337/EIP-5792 shapes are handled as ordinary bounded EIP-712 structs/arrays.',
+         '- Failure policy: dirty padding, gaps/overlap/trailing bytes, bad offsets, wrong context,',
+         '  missing definitions, invalid proof/certificate/purpose, resource excess, ambiguity and',
+         '  host/device value conflicts all refuse signing; certified failure never downgrades.',
+         '',
+         'LIMIT OF THIS SECTION: catalog-verifier success ends at the expected UNTRUSTED result',
+         'when tests use a synthetic certificate. A trusted-success emulator capture additionally',
+         'requires a certificate issued by the KeepKey root for the test delegate.',
+     ],
+     [
+         ('ER1', 'test_erc7730_compiler',
+          'test_official_registry_all_calldata_formats_reach_firmware',
+          'All 1,450 official calldata formats reach firmware',
+          'Recursively merges bounded includes, compiles every applicable registry format and '
+          'feeds each complete canonical program through the firmware catalog verifier.', []),
+         ('ER2', 'test_erc7730_compiler',
+          'test_compiles_and_checks_exact_keepkey_sdk_thorchain_swap',
+          'Exact KeepKey SDK THORChain swap fixture',
+          'Checks selector, vault, asset, amount, dynamic memo and transaction value before '
+          'firmware validation.', []),
+         ('ER3', 'test_erc7730_compiler',
+          'test_compiles_official_uniswap_tuple_fixture_through_firmware',
+          'Official Uniswap signed transaction',
+          'Binds the real Router02 target, chain, selector and published transaction hash.', []),
+         ('ER4', 'test_erc7730_compiler',
+          'test_compiles_official_uniswap_eip712_fixture_through_firmware',
+          'Official Permit2 EIP-712 fixture',
+          'Proves canonical encodeType/typeHash, domain constraints and signed token/network '
+          'metadata reach the firmware parser.', []),
+         ('ER5', 'test_erc7730_compiler',
+          'test_loads_bounded_includes_and_compiles_array_backed_group',
+          'References, includes and grouped arrays',
+          'Exercises deterministic include merge, shared field references and a group executed '
+          'inside an authenticated array frame.', []),
+         ('ER6', 'test_erc7730_compiler',
+          'test_compiles_recursive_array_iteration_frames',
+          'Recursive ABI arrays and separators',
+          'Builds nested array begin/end links and validates their declared resource depth.', []),
+         ('ER7', 'test_erc7730_compiler',
+          'test_compiles_interpolated_intent_and_metadata_enum',
+          'Atomic interpolation and enum maps',
+          'Every interpolated operand is also an unconditional field; failure selects the '
+          'fallback intent atomically.', []),
+         ('ER8', 'test_erc7730_compiler',
+          'test_compiles_typed_if_not_in_and_must_match_conditions',
+          'Typed visibility and must-match conditions',
+          'Typed literal sets control visibility; must-match is a signing assertion.', []),
+         ('ER9', 'test_erc7730_catalog',
+          'test_signed_catalog_envelope_commits_program_proof_and_certificate',
+          'Certified Merkle catalog envelope',
+          'Verifies deterministic root construction, purpose digest, signature and exact wire '
+          'layout.', []),
+         ('ER10', 'test_erc7730_catalog',
+          'test_catalog_refuses_unknown_ambiguous_and_malformed_requests',
+          'Catalog lookup fails closed',
+          'Unknown selectors, oversized chunks, excessive recursion and ambiguous tuples are '
+          'rejected.', []),
+         ('ER11', 'test_erc7730_protocol_bindings',
+          'test_definition_chunk_round_trip_is_byte_exact',
+          'Canonical protocol transport is byte exact',
+          'Protobuf bindings preserve definition id, offsets, total length and envelope bytes.', []),
+         ('ER12', 'test_erc7730_compiler',
+          'test_token_amount_without_token_uses_firmware_raw_fallback',
+          'Unknown tokens never become trusted labels',
+          'A missing token reference displays the device-decoded raw integer and forbids '
+          'token-specific auxiliary metadata.', []),
+         ('ER13', 'test_erc7730_compiler',
+          'test_parses_recursive_tuple_and_array_signature',
+          'Canonical recursive ABI signature parsing',
+          'Parses nested tuple and array fragments into the exact bounded forward tree consumed by '
+          'the firmware interpreter.', []),
+         ('ER14', 'test_erc7730_compiler',
+          'test_compiles_deterministic_canonical_calldata_program',
+          'Compilation is byte-for-byte deterministic',
+          'Equivalent descriptor input produces one canonical program, selector and source-binding '
+          'identity rather than host-dependent wire bytes.', []),
+         ('ER15', 'test_erc7730_compiler',
+          'test_compiles_array_iteration_separator_and_optional_visibility',
+          'Array iteration, separators and optional visibility',
+          'Compiles array-backed fields with authenticated length, separator control flow and '
+          'ifEmpty/ifNotEmpty behavior.', []),
+         ('ER16', 'test_erc7730_compiler',
+          'test_compiles_nested_field_group_with_balanced_links',
+          'Recursive groups have balanced control flow',
+          'Every group call/return and display-program forward link is recomputed and bounded.', []),
+         ('ER17', 'test_erc7730_catalog',
+          'test_catalog_serves_exact_lookup_and_id_replays',
+          'Exact-context lookup and authenticated replay',
+          'Serves only the requested identity tuple and re-authenticates offset-zero definition-id '
+          'replays before interpreter output becomes authoritative.', []),
+         ('ER18', 'test_erc7730_catalog',
+          'test_preload_streams_and_checks_every_acknowledgement',
+          'Preload transport checks every acknowledgement',
+          'Streams bounded chunks and refuses reordered, missing or mismatched device acknowledgements.', []),
+         ('ER19', 'test_erc7730_protocol_bindings',
+          'test_erc7730_message_ids_and_mapping',
+          'Canonical message ids are stable',
+          'Pins request, chunk and acknowledgement messages to the canonical protocol mapping.', []),
+         ('ER20', 'test_erc7730_protocol_bindings',
+          'test_lookup_kinds_encode_expected_context',
+          'Every definition kind carries its security context',
+          'Calldata, EIP-712, token and network lookups encode only their required chain, target, '
+          'selector or type-hash identity fields.', []),
+     ]),
+
     # Two-character id because all 26 letters were taken. The catalog keys on a
     # string, not a char, so this costs nothing.
     ('TD', 'Structured EIP-712 - The Device Reads The Document', '7.15.0',
@@ -2965,6 +3208,29 @@ SECTIONS = [
 
 ]
 
+# A section may span adjacent release lines even when individual native tests
+# landed later. Filter those rows before validation so a 7.14.3 report cannot
+# demand 7.15-only binaries, while 7.15 still requires the coverage.
+_TEST_MIN_VERSION = {
+    ('Storage', 'PinKdfRewrapsToActiveVersionAfterCorrectPin'): '7.15.0',
+    ('Storage', 'PinUnlocksAfterRebootUnderV17'): '7.15.0',
+    ('Storage', 'PinKdfV2FlagIsVersionedInV19'): '7.15.0',
+}
+
+
+def _active_sections(fw_version):
+    active = []
+    for letter, title, minimum, background, flow, tests in SECTIONS:
+        if not ver_ge(fw_version, minimum):
+            continue
+        filtered = [
+            test for test in tests
+            if ver_ge(fw_version,
+                      _TEST_MIN_VERSION.get((test[1], test[2]), minimum))
+        ]
+        active.append((letter, title, minimum, background, flow, filtered))
+    return active
+
 # ---------------------------------------------------------------
 # Render
 # ---------------------------------------------------------------
@@ -2996,7 +3262,7 @@ def render(output_path, fw_version, results, screenshot_dir=None):
     _build_frame_census(screenshot_dir)
     ts = datetime.now().strftime('%Y-%m-%d %H:%M')
     build_label = os.environ.get('KK_BUILD_LABEL', '').strip()
-    active = [(l,t,mf,bg,fl,tests) for l,t,mf,bg,fl,tests in SECTIONS if ver_ge(fw_version, mf)]
+    active = _active_sections(fw_version)
     # Separate specs section (no tests) from test sections
     specs = [s for s in active if not s[5]]
 
@@ -3106,6 +3372,7 @@ def render(output_path, fw_version, results, screenshot_dir=None):
             pb.text(9, f'Tests: {len(tests)}', bold=True)
         pb.gap(2)
         for tid, mod, meth, title, ctx, scr in tests:
+            scr = _screens_for(fw_version, mod, meth, scr)
             pb.need(50)
             r = _lookup(results, mod, meth)
             pb.check(9, f'{tid} {meth}', r)
@@ -3217,14 +3484,25 @@ def screenshot_filter(fw_version):
     The shell script calls this instead of maintaining a hardcoded filter.
     Adding screenshots to a test in SECTIONS automatically includes it in CI Phase 1.
     """
-    active = [(l,t,mf,bg,fl,tests) for l,t,mf,bg,fl,tests in SECTIONS if ver_ge(fw_version, mf)]
+    active = _active_sections(fw_version)
     terms = []
     for letter, title, mf, bg, fl, tests in active:
         for tid, mod, meth, ttl, ctx, scr in tests:
-            if scr:  # non-empty screenshot list = needs OLED capture
+            if _screens_for(fw_version, mod, meth, scr):
                 # Use (method and module) for unambiguous pytest -k matching
                 terms.append(f'({meth} and {mod})')
     return ' or '.join(terms)
+
+
+def screenshot_test_list(fw_version):
+    """Return exact module::method selectors consumed by conftest.py."""
+    active = _active_sections(fw_version)
+    pairs = set()
+    for _letter, _title, _mf, _bg, _fl, tests in active:
+        for _tid, mod, meth, _ttl, _ctx, screens in tests:
+            if _screens_for(fw_version, mod, meth, screens):
+                pairs.add('%s::%s' % (mod, meth))
+    return '\n'.join(sorted(pairs))
 
 
 # Modules whose tests must actually RUN once the firmware is new enough to be
@@ -3240,8 +3518,14 @@ def screenshot_filter(fw_version):
 # version-blind set would fail every older-firmware run for a module that
 # legitimately cannot exist yet.
 MUST_RUN_MODULES = {
-    'test_msg_signtx_taproot': '7.0.0',
-    'test_msg_getaddress_taproot': '7.0.0',
+    # Taproot did not exist at 7.0.0. That floor only ever held because this
+    # table was applied to products that happen to carry taproot: 7.14.2
+    # reports no supports_taproot and has no P2TR path in signing.c at all, so
+    # requiring its six taproot cases to run demanded coverage the product
+    # cannot have. The floor is the release taproot actually ships in, which
+    # keeps the requirement binding on 7.14.3 and 7.15, both of which carry it.
+    'test_msg_signtx_taproot': '7.14.3',
+    'test_msg_getaddress_taproot': '7.14.3',
     # GH #516: all three Uniswap liquidity tests used to skip together on the
     # emulator, leaving a daily-driver signing path completely unexercised.
     'test_msg_ethereum_erc20_uniswap_liquidity': '7.16.0',
@@ -3286,11 +3570,11 @@ def screenshot_audit(fw_version, screenshot_root, junit_path=None):
                     mod = next((p for p in cn.split('.') if p.startswith('test_')), '')
                     skipped.add((mod, tc.get('name')))
 
-    active = [x for x in SECTIONS if ver_ge(fw_version, x[2])]
+    active = _active_sections(fw_version)
     missing = []
     for letter, title, mf, bg, fl, tests in active:
         for tid, mod, meth, ttl, ctx, scr in tests:
-            if not scr:
+            if not _screens_for(fw_version, mod, meth, scr):
                 continue
             if (mod, meth) in skipped:
                 continue
@@ -3302,7 +3586,7 @@ def screenshot_audit(fw_version, screenshot_root, junit_path=None):
     return (len(missing) == 0, missing)
 
 
-def validate_junit(fw_version, results, build_variant='full'):
+def validate_junit(fw_version, results, variant='full'):
     """Check SECTIONS tests against JUnit results. Returns (passed, failed_list).
 
     A test is considered failed if it appears in SECTIONS for this firmware version
@@ -3311,17 +3595,19 @@ def validate_junit(fw_version, results, build_variant='full'):
     Tests that were skipped (gated by requires_message/requires_firmware) are OK,
     unless their module is in MUST_RUN_MODULES.
     """
-    active = [(l,t,mf,bg,fl,tests) for l,t,mf,bg,fl,tests in SECTIONS if ver_ge(fw_version, mf)]
+    active = _active_sections(fw_version)
     failures = []
     for letter, title, mf, bg, fl, tests in active:
         for tid, mod, meth, ttl, ctx, scr in tests:
             status = _lookup(results, mod, meth)
             if status in ('fail', 'error'):
                 failures.append((tid, mod, meth, status))
-            elif (status == 'skip'
-                  and ver_ge(fw_version, MUST_RUN_MODULES.get(mod, '99.0.0'))
-                  and not (build_variant == 'bitcoin-only'
-                           and mod in FULL_FEATURE_ONLY_MUST_RUN_MODULES)):
+            must_run = not (
+                variant == 'bitcoin-only' and
+                mod in FULL_FEATURE_ONLY_MUST_RUN_MODULES
+            )
+            if (status == 'skip' and must_run and
+                    ver_ge(fw_version, MUST_RUN_MODULES.get(mod, '99.0.0'))):
                 failures.append((tid, mod, meth, 'skipped-but-required'))
             elif not status:
                 failures.append((tid, mod, meth, 'missing'))
@@ -3329,6 +3615,7 @@ def validate_junit(fw_version, results, build_variant='full'):
 
 
 def main():
+    global SECTIONS
     p = argparse.ArgumentParser(description='KeepKey Firmware Test Report')
     p.add_argument('--output', default='test-report.pdf')
     p.add_argument('--fw-version', default=None)
@@ -3340,11 +3627,36 @@ def main():
                    help='JUnit XML for --screenshot-audit, so skipped tests are not counted missing')
     p.add_argument('--screenshot-filter', action='store_true',
                    help='Print pytest -k expression for tests needing screenshots, then exit')
+    p.add_argument('--screenshot-test-list', action='store_true',
+                   help='Print exact module::method screenshot selectors, then exit')
     p.add_argument('--validate-junit', action='store_true',
                    help='Validate JUnit results against SECTIONS, exit non-zero on failures')
-    p.add_argument('--build-variant', choices=('full', 'bitcoin-only'), default='full',
-                   help='Expected CI product; controls only explicit build-flag waivers')
+    # --build-variant is the spelling firmware CI (python-keepkey-tests.sh)
+    # passes; keep it as an alias so either repo can move first.
+    p.add_argument('--variant', '--build-variant', dest='variant',
+                   choices=('full', 'bitcoin-only'),
+                   default=os.environ.get('KK_FIRMWARE_VARIANT', 'full'),
+                   help='Product variant whose required report coverage is validated')
+    p.add_argument('--section', action='append', default=[],
+                   help='Render only the named section id (repeatable)')
+    p.add_argument('--firmware-sha', default=None,
+                   help='Exact firmware commit represented by this report')
+    p.add_argument('--python-sha', default=None,
+                   help='Exact python-keepkey commit represented by this report')
+    p.add_argument('--run-url', default=None,
+                   help='Exact CI run that produced the evidence')
+    p.add_argument('--generator-sha256', default=None,
+                   help='Combined wrapper/renderer digest')
+    p.add_argument('--arm-manifest-sha256', default=None,
+                   help='Digest binding the complete ARM manifest set')
     args = p.parse_args()
+
+    if args.section:
+        wanted = set(args.section)
+        SECTIONS = [section for section in SECTIONS if section[0] in wanted]
+        missing = wanted.difference(section[0] for section in SECTIONS)
+        if missing:
+            p.error('unknown section(s): %s' % ', '.join(sorted(missing)))
 
     fw = args.fw_version
     if not fw:
@@ -3366,13 +3678,16 @@ def main():
     if args.screenshot_filter:
         print(screenshot_filter(fw))
         sys.exit(0)
+    if args.screenshot_test_list:
+        print(screenshot_test_list(fw))
+        sys.exit(0)
 
     if args.validate_junit:
         if not args.junit:
             print('ERROR: --validate-junit requires --junit=<path>', file=sys.stderr)
             sys.exit(2)
         results = parse_junit(args.junit)
-        ok, failures = validate_junit(fw, results, args.build_variant)
+        ok, failures = validate_junit(fw, results, args.variant)
         if ok:
             print(f'SECTIONS validation passed: all tests for fw {fw} are pass or skip')
             sys.exit(0)
@@ -3381,6 +3696,17 @@ def main():
             for tid, mod, meth, status in failures:
                 print(f'  {tid} {mod}::{meth} -> {status}')
             sys.exit(1)
+
+    provenance = [
+        ('firmware', args.firmware_sha),
+        ('python', args.python_sha),
+        ('run', args.run_url),
+        ('generator', args.generator_sha256),
+        ('arm-manifests', args.arm_manifest_sha256),
+    ]
+    supplied = ['%s=%s' % item for item in provenance if item[1]]
+    if supplied:
+        os.environ['KK_BUILD_LABEL'] = ' | '.join(supplied)
 
     results = parse_junit(args.junit) if args.junit else {}
     render(args.output, fw, results, args.screenshots)
