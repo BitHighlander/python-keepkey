@@ -135,7 +135,7 @@ SDICE_DEFINITION_SIG = bytes.fromhex(
 # The join's decoded values (Vault __tests__/fixtures/solana/
 # soltoshidice-blackjack-join.json).
 SESSION_KEY = "BqtZ8PRQywD9Z5xXeB5112wtPG3xtj7TqF56hroicGjX"
-SDICE_TRUSTED = "1000 SDICE\n" + SDICE_MINT
+SDICE_TRUSTED = "1000.000000 SDICE\n" + SDICE_MINT
 SDICE_UNTRUSTED = "1000000000 base units of mint\n" + SDICE_MINT
 # 1,000,000 micro-lamports x the join's 200,000-unit limit = 200,000 lamports.
 JOIN_PRICE = 1000000
@@ -359,7 +359,7 @@ class TestSolanaSchemaCertified(SchemaReview):
         screens += [
             (instr(total - 1), "Funding account\n" + payer),
             (instr(total - 1), "Send 0.002000000 SOL to %s?" % SESSION_KEY),
-            ("KEEPKEY CLEARSIGN", "KeepKey Vault\nSigner A9531B9D"),
+            ("KEEPKEY CLEARSIGN", "KeepKey Vault\nSigner " + hashlib.sha256(CERT_501[42:75]).hexdigest()[:16].upper()),
             ("SOLTOSHIDICE", "Blackjack join"),
             ("ROUND", "86"),
             ("REVISION", "980"),
@@ -589,7 +589,7 @@ class TestSolanaSchemaRuntime(SchemaReview):
             self.assertEqual(len(response.signature), 64)
             return screens
 
-        trusted = "1000 SDICE\n" + SDICE_MINT
+        trusted = "1000.000000 SDICE\n" + SDICE_MINT
         untrusted = "1000000000 base units of mint\n" + SDICE_MINT
 
         same = review(2, "join_schema_signer_definition")

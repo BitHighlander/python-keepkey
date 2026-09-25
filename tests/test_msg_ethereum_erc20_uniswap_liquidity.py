@@ -23,6 +23,8 @@ import struct
 import keepkeylib.messages_pb2 as proto
 import keepkeylib.types_pb2 as proto_types
 from keepkeylib.client import CallException
+from test_msg_display_disclosure import ScreenRecorder
+from oled_text import find_text
 from keepkeylib.tools import int_to_big_endian
 
 class TestMsgEthereumUniswaptxERC20(common.KeepKeyTest):
@@ -102,11 +104,8 @@ class TestMsgEthereumUniswaptxERC20(common.KeepKeyTest):
         self.setup_mnemonic_nopin_nopassphrase()
         self.client.apply_policy("AdvancedMode", 1)
 
-        # Canonical 7.15 refuses removeLiquidityETH when its recipient is not
-        # the signing wallet. Older firmware signed this legacy vector after a
-        # soft warning, which could route both assets to an attacker.
-        with self.assertRaises(CallException) as caught:
-            self.client.ethereum_sign_tx(
+        def sign():
+            return self.client.ethereum_sign_tx(
                 n=[2147483692,2147483708,2147483648,0,0],
                 nonce=0xf,
                 gas_price=0x320313e400,
@@ -123,6 +122,25 @@ class TestMsgEthereumUniswaptxERC20(common.KeepKeyTest):
                     '0000000000000000000000005028d647b74f12903e6d5f3969f8f624e6a9a93d' +
                     '00000000000000000000000000000000000000000000000000000178b2062f3d')
             )
+
+        if self.firmware_at_least("7.17.0"):
+            # Alpha explicitly discloses the external recipient and accepts
+            # only the owner's approval; retain its historical signature.
+            with ScreenRecorder(self.client) as recorder:
+                sig_v, sig_r, sig_s = sign()
+            self.assertIsNotNone(find_text(recorder.screens,
+                "NOT this wallet\n0x5028d647b74f12903e6d5f3969f8f624e6a9a93d"))
+            self.assertEqual(sig_v, 37)
+            self.assertEqual(sig_r.hex(),
+                "7143f0d8e5505a8cfb1df55e9c5d7433eba33a61959137c08cc5c088ec12ab5d")
+            self.assertEqual(sig_s.hex(),
+                "20b456d6c13295f5abb6109d7ade2c5d5fc395963b1e45d92e6dc8c33749c517")
+            with self.assertRaises(CallException) as caught:
+                with ScreenRecorder(self.client, answer=False):
+                    sign()
+        else:
+            with self.assertRaises(CallException) as caught:
+                sign()
         self.assertEqual(caught.exception.args[0],
                          proto_types.Failure_ActionCancelled)
 
