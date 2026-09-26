@@ -320,7 +320,7 @@ class TestMsgEthereumErc7730Runtime(Erc7730Harness, common.KeepKeyTest):
         self.assertEqual(self._token_screen(self.USDC, 1500000, params),
                          ["Amount:\nSigner: Large amount\n1.5 USDC"])
 
-    def test_native_alias_shows_the_chains_native_asset(self):
+    def test_native_alias_discloses_signer_mapping_and_token_address(self):
         params = {"nativeCurrencyAddress": ["0x" + self.NATIVE.hex()]}
         # An address outside the alias set is not the native asset.
         self.assertEqual(
@@ -329,7 +329,8 @@ class TestMsgEthereumErc7730Runtime(Erc7730Harness, common.KeepKeyTest):
              OTHER_ADDRESS.hex()])
         self.assertEqual(
             self._token_screen(self.NATIVE, 1500000000000000000, params),
-            ["Amount:\n1.5 ETH"])
+            ["Amount:\nSigner native alias:\n0x" + self.NATIVE.hex() +
+             "\n1.5 ETH"])
 
     def test_address_name_marks_only_the_signing_account(self):
         signer = self.client.ethereum_get_address(PATH)
