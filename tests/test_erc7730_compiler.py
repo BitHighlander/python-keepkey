@@ -587,3 +587,24 @@ def test_refuses_scalar_value_repeated_inside_iteration():
         pytest.fail("formatter section missing")
     _firmware_validate(bytes(program),
                        "a field reads another array than its iteration")
+
+
+def test_iteration_binds_every_formatter_path_to_its_array():
+    signature = (
+        "batch((uint256 amount,address token)[] items,address[] other,"
+        "address fallback)")
+    for token_path, refusal in (
+            ("items.[].token", None),
+            ("other.[]", "a field reads another array than its iteration"),
+            ("fallback", "a field reads another array than its iteration")):
+        descriptor = {"display": {"formats": {signature: {
+            "intent": "Batch", "fields": [{
+                "path": "items.[].amount", "label": "Amount",
+                "format": "tokenAmount",
+                "params": {"tokenPath": token_path}}]}}}}
+        program = _unchecked(compile_calldata, descriptor, signature, 1,
+                             "0x" + "11" * 20)
+        _firmware_validate(program, refusal)
+        if refusal:
+            with pytest.raises(DeviceCannotExecute, match=refusal):
+                compile_calldata(descriptor, signature, 1, "0x" + "11" * 20)
