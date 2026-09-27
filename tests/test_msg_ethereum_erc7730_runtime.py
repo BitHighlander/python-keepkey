@@ -908,14 +908,15 @@ class TestMsgEthereumErc7730Runtime(Erc7730Harness, common.KeepKeyTest):
                 "Moves:\n2 ETH", "As:\n" + authority, "Token:\n" + usdc])
 
     def test_embedded_calls_inside_an_iteration_are_shown_blind(self):
-        signature = "multicall(bytes[] calls)"
+        signature = "multicall((address callee,bytes data)[] calls)"
         descriptor = {"display": {"formats": {signature: {
             "intent": "Multicall", "fields": [{
-                "path": "calls.[]", "label": "Call", "format": "calldata",
-                "params": {"calleePath": "@.to"}}]}}}}
+                "path": "calls.[].data", "label": "Call", "format": "calldata",
+                "params": {"calleePath": "calls.[].callee"}}]}}}}
         call = bytes.fromhex("a9059cbb") + self._word(OTHER_ADDRESS) + self._word(1)
         padded = call + bytes(-len(call) % 32)
-        element = self._word(len(call)) + padded
+        element = (self._word(OTHER_ADDRESS) + self._word(64) +
+                   self._word(len(call)) + padded)
         arguments = (self._word(32) + self._word(2) + self._word(64) +
                      self._word(64 + len(element)) + element + element)
         program = erc7730_compiler.compile_calldata(
@@ -923,7 +924,7 @@ class TestMsgEthereumErc7730Runtime(Erc7730Harness, common.KeepKeyTest):
         self._certified(program, arguments)
         shown = [s for s in self._first_pages()
                  if s[0] == "Blind signature" or s[0].startswith("Signer field")]
-        body = ("Call:\nTo 0x" + ADDRESS.hex() +
+        body = ("Call:\nTo 0x" + OTHER_ADDRESS.hex() +
                 "\nFunction 0xa9059cbb\nData 68 bytes")
         self.assertEqual(shown, [
             ("Blind signature", "The inner call is not clear-signed"),
@@ -972,39 +973,20 @@ class TestMsgEthereumErc7730Runtime(Erc7730Harness, common.KeepKeyTest):
                        "The inner call is not clear-signed"), shown)
         self.assertNotIn("Inner field", [s[0] for s in shown])
 
-    def test_parallel_arrays_pair_by_index_and_a_short_one_fails_closed(self):
-        # ERC-7730 pairs a field's arrays by index: amounts[i] with tokens[i].
-        # When the second array is shorter the device stops without signing.
+    def test_parallel_arrays_are_refused_before_preload(self):
+        # A token formatter cannot pair amounts[i] with an independent
+        # tokens[i] array: the auxiliary token path must read the active array.
         signature = "batch(address[] tokens,uint256[] amounts)"
         descriptor = {"display": {"formats": {signature: {
             "intent": "Batch", "fields": [{
                 "path": "amounts.[]", "label": "Amount", "format": "tokenAmount",
                 "params": {"tokenPath": "tokens.[]"}}]}}}}
 
-        def arguments(tokens):
-            return (self._word(64) + self._word(96 + 32 * len(tokens)) +
-                    self._word(len(tokens)) +
-                    b"".join(self._word(t) for t in tokens) +
-                    self._word(2) + self._word(7) + self._word(8))
-        program = erc7730_compiler.compile_calldata(
-            descriptor, signature, 1, ADDRESS)
-        short = arguments([OTHER_ADDRESS])
-        envelope = self._preload(program)
-        result, _, _, _ = self._walk(
-            self._audit_start(program, 4 + len(short)), envelope,
-            arguments=short)
-        self.assertIsInstance(result, proto.Failure)
-        self.assertEqual(result.message,
-                         "ERC-7730 calldata does not match definition")
-        self.assertNotIn(types.ButtonRequest_SignTx, self.button_codes)
-        self.assertEqual(
-            self._titled_fields(descriptor, signature,
-                                arguments([OTHER_ADDRESS, ADDRESS])), [
-                ("Signer field 1 of 2", "Amount:\n7\nunknown token\n0x" +
-                 OTHER_ADDRESS.hex()),
-                ("Signer field 2 of 2", "Amount:\n8\nunknown token\n0x" +
-                 ADDRESS.hex()),
-            ])
+        with self.assertRaisesRegex(
+                erc7730_compiler.DeviceCannotExecute,
+                "a field reads another array than its iteration"):
+            erc7730_compiler.compile_calldata(
+                descriptor, signature, 1, ADDRESS)
 
     def test_a_call_at_depth_two_is_shown_blind(self):
         # A Safe executing a call on a second Safe: the second Safe's
