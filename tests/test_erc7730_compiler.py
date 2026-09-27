@@ -471,9 +471,13 @@ DEVICE_LIMITS = (
 # amount, rather than reinterpret bytes the calldata does not say are one.
 # Phase B adds the interpolated intent, shown as numbered parts: 954.
 # Phase C adds amount, nftName, date, duration, unit, enum and @.value: 1138.
-# Phase D adds groups, single-array iteration and "optional" fields: 1294.
-# Phase E1 adds embedded calldata, shown under a blind-sign warning: 1326.
-REGISTRY_SIGNABLE = 1326
+# Phase D adds groups, single-array iteration and "optional" fields. The
+# reviewed array-binding rule refuses 21 registry programs whose auxiliary
+# formatter paths do not walk the displayed item's array: 1273.
+# Phase E1 adds embedded calldata, shown under a blind-sign warning. The
+# strict formatter rule refuses 29 formerly accepted programs in this phase:
+# 1297 remain signable across the 1450 checked registry formats.
+REGISTRY_SIGNABLE = 1297
 
 
 def test_official_registry_all_calldata_formats_reach_firmware():
