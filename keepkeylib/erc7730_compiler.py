@@ -1241,7 +1241,8 @@ def device_refusal(program, capabilities=DEVICE_CAPABILITIES):
     formatter_arrays = []
     at = 2
     for _ in range(u16(formatters, 0)):
-        value_array, any_array, value_literal = None, False, False
+        value_array, any_array, mixed_arrays, value_literal = (
+            None, False, False, False)
         kind, argc = formatters[at], formatters[at + 2]
         at += 3
         if kind not in capabilities["formatters"]:
@@ -1280,17 +1281,21 @@ def device_refusal(program, capabilities=DEVICE_CAPABILITIES):
             if (role == 1 and source == 1 and index < len(path_classes) and
                     isinstance(path_classes[index], tuple)):
                 value_literal = True
-            if source == 1 and path_arrays[index] is not None:
-                any_array = True
+            if source == 1:
+                argument_array = path_arrays[index]
+                if argument_array is not None:
+                    any_array = True
                 if role == 1:
-                    value_array = path_arrays[index]
+                    value_array = argument_array
+                elif argument_array != value_array:
+                    mixed_arrays = True
             seen.add(role)
         if not required <= seen:
             return "formatter kind %d lacks a required argument" % kind
         if kind == 13 and not calldata:
             return "embedded calldata is executed for calldata only"
-        formatter_arrays.append((value_array, any_array, kind == 13,
-                                 value_literal))
+        formatter_arrays.append((value_array, any_array, mixed_arrays,
+                                 kind == 13, value_literal))
 
     displays = sections.get(7, b"\0\0")
     run_closed = False
@@ -1316,7 +1321,7 @@ def device_refusal(program, capabilities=DEVICE_CAPABILITIES):
         elif opcode == 8:
             iteration = None
         elif opcode in (3, 4):
-            value_array, any_array, embedded, value_literal = (
+            value_array, any_array, mixed_arrays, embedded, value_literal = (
                 formatter_arrays[a if opcode == 3 else b])
             if opcode == 3 and embedded:
                 return "an embedded call cannot be an intent value"
@@ -1326,7 +1331,8 @@ def device_refusal(program, capabilities=DEVICE_CAPABILITIES):
                 return "a field label is longer than the device shows"
             if any_array and iteration is None:
                 return "an iterating value outside an iteration"
-            if iteration is not None and value_array != iteration:
+            if iteration is not None and (value_array != iteration or
+                                          mixed_arrays):
                 return "a field reads another array than its iteration"
     return None
 
