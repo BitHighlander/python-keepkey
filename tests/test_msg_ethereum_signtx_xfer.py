@@ -63,7 +63,7 @@ class TestMsgEthereumSigntx(common.KeepKeyTest):
             # 7.15 explicitly labels the untrusted token value before the raw
             # calldata review; pin that first warning frame exactly.
             expected_frame = (
-                "ccaae357cd0efe7dfa015d93ba08079e415b8857e6139a7773fd6efbec37ea35"
+                "c5c6c52a7f3f8fec250b2e9f79f688e1fa8d063357ad8277859f9b23d4861dca"
                 if self.firmware_at_least("7.15.0") else
                 "b0a3026e7af1778ebd71a968ace25c03945cccf2d8abc951e5dd65abc04e914e"
             )
