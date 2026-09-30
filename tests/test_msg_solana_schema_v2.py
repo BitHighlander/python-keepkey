@@ -135,7 +135,9 @@ SDICE_DEFINITION_SIG = bytes.fromhex(
 # The join's decoded values (Vault __tests__/fixtures/solana/
 # soltoshidice-blackjack-join.json).
 SESSION_KEY = "BqtZ8PRQywD9Z5xXeB5112wtPG3xtj7TqF56hroicGjX"
-SDICE_TRUSTED = "1000 SDICE\n" + SDICE_MINT
+# Every fractional place is shown (the definition says 6 decimals): trimming
+# trailing zeros would hide the scale of the amount.
+SDICE_TRUSTED = "1000.000000 SDICE\n" + SDICE_MINT
 SDICE_UNTRUSTED = "1000000000 base units of mint\n" + SDICE_MINT
 # 1,000,000 micro-lamports x the join's 200,000-unit limit = 200,000 lamports.
 JOIN_PRICE = 1000000
