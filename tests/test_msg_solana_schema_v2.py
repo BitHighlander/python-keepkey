@@ -663,7 +663,7 @@ class TestSolanaSchemaRuntime(SchemaReview):
             self.assertEqual(len(response.signature), 64)
             return screens
 
-        trusted = "1000 SDICE\n" + SDICE_MINT
+        trusted = SDICE_TRUSTED
         untrusted = "1000000000 base units of mint\n" + SDICE_MINT
 
         same = review(2, "join_schema_signer_definition")
