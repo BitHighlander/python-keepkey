@@ -982,10 +982,10 @@ SECTIONS = [
           'Bytes past the declared roll count must not affect the result, so uninitialized tail '
           'bytes of the roll buffer can never leak into seed material.',
           []),
-         ('K7b', 'Dice', 'BiasGateIsThirtyPercentPerFace',
+         ('K7b', 'Dice', 'BiasGateRefusesOnlyAtOneInAMillion',
           'Loaded-die gate threshold',
-          'Coldcard\'s rule: any face over 30% of the rolls is refused. 30/99 fails, 29/99 passes; '
-          '16/50 fails, 15/50 (exactly 30%) passes.',
+          'A face is refused only when a fair die would roll it that often less than once in a '
+          'million: 25/50, 32/75 and 39/99 are refused, one fewer passes, on every face.',
           []),
          ('K7c', 'Dice', 'BiasGateRejectsNonDiceBytes',
           'Non-d6 bytes are refused',
