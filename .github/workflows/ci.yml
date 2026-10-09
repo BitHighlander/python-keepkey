@@ -97,9 +97,16 @@ jobs:
   # ═══════════════════════════════════════════════════════════
 
   integration:
+    # Two shards so a slow or flaky runner costs half a suite, not all of it.
+    # The main shard keeps the check name "integration".
+    name: ${{ matrix.shard == 'main' && 'integration' || 'integration (eip712 corpus)' }}
     needs: [lint]
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [main, corpus]
 
     # NO published emulator image. This job BUILDS one from current firmware.
     #
@@ -263,7 +270,13 @@ jobs:
             sudo iptables -D OUTPUT -d "$EMULATOR_IP" -j ACCEPT
           }
           trap cleanup_network_gate EXIT
-          pytest -v --junitxml=junit.xml 2>&1 | tee pytest-output.txt
+          # --timeout: a hung test fails by name instead of eating the job.
+          if [ "${{ matrix.shard }}" = corpus ]; then
+            SELECT="test_msg_eip712_corpus.py"
+          else
+            SELECT="--ignore=test_msg_eip712_corpus.py"
+          fi
+          pytest -v --timeout=300 --junitxml=junit.xml $SELECT 2>&1 | tee pytest-output.txt
           echo "${PIPESTATUS[0]}" > status
 
       - name: Test summary
@@ -476,7 +489,7 @@ jobs:
             sudo iptables -D OUTPUT -d "$EMULATOR_IP" -j ACCEPT
           }
           trap cleanup_network_gate EXIT
-          pytest -v --junitxml=junit-7143.xml 2>&1 | tee pytest-7143-output.txt
+          pytest -v --timeout=300 --junitxml=junit-7143.xml 2>&1 | tee pytest-7143-output.txt
           echo "${PIPESTATUS[0]}" > status-7143
 
       - name: 7.14.3 summary
@@ -713,7 +726,7 @@ jobs:
             sudo iptables -D OUTPUT -d "$EMULATOR_IP" -j ACCEPT
           }
           trap cleanup_network_gate EXIT
-          pytest -v --junitxml=junit-btc.xml test_msg_bitcoin_only_variant.py \
+          pytest -v --timeout=300 --junitxml=junit-btc.xml test_msg_bitcoin_only_variant.py \
             2>&1 | tee pytest-btc-output.txt
           echo "${PIPESTATUS[0]}" > status-btc
 
