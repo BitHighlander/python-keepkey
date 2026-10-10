@@ -14,18 +14,10 @@ metadata at all. If a lying provider could suppress any of those, a runtime
 schema would be a screen-substitution oracle: "supply 10.5 DAI to Aave" on the
 glass, arbitrary calldata under the signature.
 
-lib/firmware/ethereum.c:828 is where this is enforced:
-
-    if (signed_metadata_from_loaded_signer()) {
-        needs_confirm = true;        /* forced back ON */
-        data_needs_confirm = true;   /* forced back ON */
-    } else {
-        needs_confirm = signed_metadata_schema_moves_value();
-        data_needs_confirm = false;  /* raw review SUPPRESSED */
-    }
-
-The else-branch is reserved for a future firmware-PINNED signer and must not be
-reachable by anything a host can load today.
+Firmware 7.15 has no firmware-trusted signer, so signed metadata is always
+additive: after the decoded screens are approved, ethereum_signing_init()
+still sets needs_confirm and data_needs_confirm, and the ordinary amount,
+raw-calldata and fee screens follow.
 
 HOW THESE TESTS MEASURE SCREENS
 -------------------------------
@@ -87,8 +79,7 @@ from test_msg_ethereum_clear_signing import (
 # METADATA_MAX_KEYS in include/keepkey/firmware/signed_metadata.h.
 METADATA_MAX_KEYS = 4
 
-# The canonical 7.15 product requires additive runtime provider review.
-# Do not inherit the earlier RC18 candidate's capability assumptions.
+# Additive runtime provider review ships in firmware 7.15.
 ADDITIVE_REVIEW_FIRMWARE = "7.15.0"
 
 # The Aave V3 supply() transaction every additive test signs. Real ABI
@@ -161,10 +152,12 @@ class TestClearSignAdditiveInvariant(common.KeepKeyTest):
 
     def setUp(self):
         super().setUp()
-        self.requires_release_capability("erc7730-runtime-review")
+        # Version, then message availability, then the firmware-reported
+        # capability (runtime EVM transaction metadata, not ERC-7730).
         self.requires_firmware("7.15.0")
         self.requires_message("EthereumTxMetadata")
         self.requires_message("LoadClearsignSigner")
+        self.requires_release_capability("evm-tx-metadata")
         self.setup_mnemonic_nopin_nopassphrase()
         # AdvancedMode is required both for the raw-calldata review to be
         # reachable at all and for a runtime signer to verify anything.
@@ -365,6 +358,47 @@ class TestClearSignAdditiveInvariant(common.KeepKeyTest):
         self._assert_baseline_survives(baseline, observed)
         added = len(observed.frames) - len(baseline.frames)
         self.assertTrue(added >= 3 + len(v2_args))
+
+
+    def test_runtime_intent_heading_and_limits_precede_the_unchanged_review(self):
+        """A runtime-signed 0x05 intent schema (SRS-7.15 R-1.5) adds a "NOT
+        verified by KeepKey" heading and its Limits IN FRONT of the review,
+        and every baseline screen still follows, unchanged and in order."""
+        import struct
+        import oled_text
+        self.requires_firmware("7.16.0")
+        self.requires_release_capability("evm-certified-intent")
+        self._load_signer()
+        self._drop_setup_screenshots()
+        baseline, sig = self._record_supply()
+        self._assert_recovers(sig)
+
+        def text(b):
+            return bytes([len(b)]) + b
+        body = bytearray([0x05]) + struct.pack('>I', TX['chain_id'])
+        body += AAVE_V3_POOL + AAVE_SUPPLY_SELECTOR
+        body += struct.pack('>H', 6) + b'supply' + bytes([4])
+        body += text(b'asset') + bytes([ARG_FORMAT_ADDRESS, 0])
+        body += text(b'amount') + bytes([ARG_FORMAT_TOKEN_AMOUNT, 18, 3]) + \
+            b'DAI' + bytes([3])  # spend exact
+        body += text(b'onBehalfOf') + bytes([ARG_FORMAT_ADDRESS, 0])
+        body += text(b'referral') + bytes([3, 0])  # BYTES, no role
+        body += bytes([0]) + text(b'Aave') + text(b'Supply {1} to Aave for {2}')
+        body += bytes([CLASSIFICATION_VERIFIED]) + struct.pack('>I', 0) + \
+            bytes([TEST_KEY_ID])
+        resp = self.client.ethereum_send_tx_metadata(
+            signed_payload=sign_metadata(bytes(body)), metadata_version=1,
+            key_id=TEST_KEY_ID)
+        self.assertEqual(resp.classification, CLASSIFICATION_VERIFIED)
+
+        observed, sig = self._record_supply()
+        self._assert_recovers(sig)
+        title = oled_text.TITLE_FONT
+        self.assertIsNotNone(oled_text.find_line(observed.frames[0][1],
+                                                 'UNVERIFIED', title))
+        self.assertIsNotNone(oled_text.find_line(observed.frames[1][1],
+                                                 'LIMITS', title))
+        self._assert_baseline_survives(baseline, observed)
 
 
 if __name__ == '__main__':

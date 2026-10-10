@@ -23,6 +23,7 @@ import common
 import binascii
 import hashlib
 
+import oled_text
 import keepkeylib.messages_pb2 as proto
 import keepkeylib.messages_ethereum_pb2 as eth_proto
 import keepkeylib.types_pb2 as proto_types
@@ -34,9 +35,9 @@ from test_msg_display_disclosure import ScreenRecorder
 class TestMsgEthereumSigntx(common.KeepKeyTest):
     def test_ethereum_native_pseudo_address_is_unknown_off_mainnet(self):
         """0xeeee..eeee must render as unknown for chain-257 token calls."""
-        self.requires_release_capability("evm-unknown-token-review")
         self.requires_firmware("7.14.2")
         self.requires_fullFeature()
+        self.requires_release_capability("evm-unknown-token-review")
         self.setup_mnemonic_nopin_nopassphrase()
         self.client.apply_policy("AdvancedMode", 1)
         common.reset_screenshot_capture(self.client)
@@ -47,6 +48,8 @@ class TestMsgEthereumSigntx(common.KeepKeyTest):
             expected_frames = {
                 "transfer": (
                     "ae5808843f0f6740b766276b9f9fa7092b80c988d813f6fd66098c5eb03508cf"),
+                "approve": (
+                    "76dc40a70e5b6a95de28d57b71b40e4ca3da2c115e03c66fe03d3c0afda68c15"),
             }
         else:
             # 7.14.3 uses the pre-7.15 review layout while proving the same
@@ -129,9 +132,9 @@ class TestMsgEthereumSigntx(common.KeepKeyTest):
 
     def test_ethereum_unrenderable_amounts_are_rejected(self):
         """Maximum native and token amounts must never reach a blank review."""
-        self.requires_release_capability('evm-max-amount-review')
         self.requires_firmware("7.14.2")
         self.requires_fullFeature()
+        self.requires_release_capability('evm-max-amount-review')
         self.setup_mnemonic_nopin_nopassphrase()
 
         recipient = binascii.unhexlify(
@@ -156,7 +159,10 @@ class TestMsgEthereumSigntx(common.KeepKeyTest):
                         with self.assertRaises(CallException):
                             self.client.ethereum_sign_tx(**tx)
                 self.assertEqual(len(recorder.screens), 1)
-                self.assertGreater(sum(bytearray(recorder.screens[0])), 0)
+                # The full value is drawn, not blanked: its leading digits fill
+                # the first body line exactly as the firmware's font renders.
+                self.assertIsNotNone(oled_text.find_line(
+                    recorder.screens[0], str(max_uint256)[:39]))
         else:
             def assert_amount_is_safe(**tx):
                 # 7.14.x has the smaller formatter and its safe behavior is

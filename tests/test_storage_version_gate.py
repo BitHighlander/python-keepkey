@@ -186,9 +186,12 @@ PIN = "1234"
 BIP44_ADDRESS_N = [2147483692, 2147483648, 2147483648, 0, 0]  # m/44'/0'/0'/0/0
 
 
-def _storage_crc(data):
-    """STM32 CRC-32/MPEG-2 over native little-endian 32-bit words."""
-    if len(data) != STORAGE_RECORD_DATA_LEN or len(data) % 4:
+def _storage_crc(record):
+    """STM32 CRC-32/MPEG-2 over native little-endian 32-bit words, covering
+    record bytes [4, 2572): everything but the magic, which storage_commit()
+    writes last (the record is staged without it)."""
+    data = record[len(STORAGE_MAGIC):STORAGE_RECORD_DATA_LEN]
+    if len(data) != STORAGE_RECORD_DATA_LEN - len(STORAGE_MAGIC) or len(data) % 4:
         raise ValueError("storage CRC requires the complete word-aligned record")
     crc = 0xFFFFFFFF
     for pos in range(0, len(data), 4):
@@ -479,6 +482,10 @@ def _free_port_pair():
     raise RuntimeError("no free UDP port pair for the emulator")
 
 
+class _PortTaken(Exception):
+    pass
+
+
 class Emulator(object):
     """One kkemu process over one flash image, restartable.
 
@@ -508,7 +515,21 @@ class Emulator(object):
             s.close()
 
     def boot(self):
+        # _free_port_pair() can only say the pair was free a moment ago;
+        # another process may bind it before kkemu does. kkemu then exits
+        # with "Failed to bind socket", and the image is untouched, so try
+        # a fresh pair rather than fail the test on a port race.
+        for _ in range(5):
+            try:
+                return self._boot_once()
+            except _PortTaken:
+                self.port = _free_port_pair()
+        raise RuntimeError("emulator could not bind a UDP port pair")
+
+    def _boot_once(self):
         assert self.proc is None, "already booted"
+        log_path = os.path.join(self.workdir, "emu.log")
+        log_start = os.path.getsize(log_path) if os.path.exists(log_path) else 0
         env = dict(os.environ, KEEPKEY_UDP_PORT=str(self.port))
         with open(os.path.join(self.workdir, "emu.log"), "ab") as log:
             self.proc = subprocess.Popen(
@@ -521,6 +542,10 @@ class Emulator(object):
             for _ in range(100):
                 time.sleep(0.1)
                 if self.proc.poll() is not None:
+                    with open(log_path, "rb") as log:
+                        log.seek(log_start)
+                        if b"Failed to bind socket" in log.read():
+                            raise _PortTaken()
                     raise RuntimeError(
                         "emulator exited rc=%s before answering; see %s"
                         % (self.proc.returncode, os.path.join(self.workdir, "emu.log")))
@@ -591,7 +616,7 @@ class Emulator(object):
                 trailer == STORAGE_RECORD_TRAILER_MAGIC
                 and struct.unpack(
                     "<I", record[STORAGE_RECORD_CRC_OFFSET:STORAGE_RECORD_LEN]
-                )[0] == _storage_crc(record[:STORAGE_RECORD_DATA_LEN]))
+                )[0] == _storage_crc(record))
             if not legacy and not verified:
                 continue
 
@@ -647,7 +672,7 @@ class Emulator(object):
             raise AssertionError("cannot refresh CRC on an unframed record")
         self.patch(
             off, STORAGE_RECORD_CRC_OFFSET,
-            struct.pack("<I", _storage_crc(record[:STORAGE_RECORD_DATA_LEN])))
+            struct.pack("<I", _storage_crc(record)))
 
 
 def _teach_pin(client, pin):
@@ -778,22 +803,6 @@ class TestStorageVersionGateSource(unittest.TestCase):
         self.burned = _burned_declared(self.inc)
         self.arms = _from_flash_arms(self.c)
 
-    def test_v19_kdf_release_controls_are_present(self):
-        missing = {
-            value.strip() for value in
-            os.environ.get("KK_RELEASE_MISSING_CAPABILITIES", "").split(",")
-            if value.strip()
-        }
-        if "storage-v19-kdf" in missing:
-            self.skipTest(
-                "Staged release tree does not yet provide capability: "
-                "storage-v19-kdf")
-        # This marker transports the staged capability declaration into JUnit.
-        # The report catalog itself still requires all three native controls
-        # when this capability is present; duplicating firmware-source
-        # inspection here would couple canonical python-keepkey to whichever
-        # firmware checkout happens to surround it.
-        self.assertTrue(True)
 
     # -- helpers ------------------------------------------------------------
 

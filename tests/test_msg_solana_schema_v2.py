@@ -293,6 +293,7 @@ class TestSolanaSchemaCertified(SchemaReview):
                       str(refused.exception))
 
     def test_certified_v1_schema_reviews_static_transfer_companion(self):
+        self.requires_release_capability("solana-certified-review")
         send = "Also sends 0.002000000 SOL to\n%s" % b58encode(DESTINATION)
         base, base_screens = self._review(
             self._certified(relay_message(self.signer, [RELAY_IX])),
@@ -315,6 +316,7 @@ class TestSolanaSchemaCertified(SchemaReview):
         plus the maximum priority fee: 1,000,000 micro-lamports x 200,000
         units = 200,000 lamports. The payer is named only when it is not
         this device's key (SRS-7.16 R-7.3)."""
+        self.requires_release_capability("solana-certified-review")
         _, plain = self._review(
             self._certified(relay_message(self.signer,
                                           [limit(200000), RELAY_IX])),
@@ -335,7 +337,10 @@ class TestSolanaSchemaCertified(SchemaReview):
             with self.assertRaises(CallException) as refused:
                 self.client.call(
                     self._certified(relay_message(self.signer, ixs)))
-            self.assertIn("Invalid priority fee", str(refused.exception))
+            # The parser refuses the message itself (7.15 rule), before any
+            # certified check can run.
+            self.assertIn("Malformed Solana transaction",
+                          str(refused.exception))
 
     # The real SoltoshiDICE join, certified by the deployed ClearSign Worker.
 
@@ -390,6 +395,7 @@ class TestSolanaSchemaCertified(SchemaReview):
         """The Worker's schema and SDICE definition name every value of the
         join, AdvancedMode off. These frames are the report's evidence, so
         the setUp policy screen is dropped first."""
+        self.requires_release_capability("solana-certified-review")
         raw = soltoshi_join(self.signer)
         self.client.reset_screenshots()
         response, screens = self._review(
@@ -401,6 +407,7 @@ class TestSolanaSchemaCertified(SchemaReview):
         """With a compute-unit price added, the network-fee bound includes
         the maximum priority fee; the payer is this key, so it is not named
         separately."""
+        self.requires_release_capability("solana-certified-review")
         raw = soltoshi_join(self.signer, priced=True)
         response, screens = self._review(
             self._join_request(raw, [sdice_definition()]), "join_priced")
@@ -413,6 +420,7 @@ class TestSolanaSchemaCertified(SchemaReview):
         """No definition, or one with one byte of its signature changed: the
         three amounts are raw base units beside the mint, nothing else
         changes, and the join still signs."""
+        self.requires_release_capability("solana-certified-review")
         raw = soltoshi_join(self.signer)
         response, missing = self._review(self._join_request(raw),
                                          "join_no_definition")
@@ -430,6 +438,7 @@ class TestSolanaSchemaCertified(SchemaReview):
     def test_certified_soltoshi_join_ignores_blind_sign_policy(self):
         """AdvancedMode on changes nothing: the same certified review, frame
         for frame, and never the Blind Sign screen."""
+        self.requires_release_capability("solana-certified-review")
         raw = soltoshi_join(self.signer)
         request = self._join_request(raw, [sdice_definition()])
         _, off = self._review(request, "join_policy_off")
@@ -516,6 +525,7 @@ class TestSolanaSchemaRuntime(SchemaReview):
     def setUp(self):
         super(TestSolanaSchemaRuntime, self).setUp()
         self.requires_message("LoadClearsignSigner")
+        self.requires_release_capability("solana-runtime-review")
         signed_metadata.assert_test_key_matches_slot3()
         self.client.apply_policy("AdvancedMode", True)
         self.signer = self._signer()
@@ -691,6 +701,25 @@ class TestClearsignAttestorTokenAmount(SchemaReview):
             response = self.client.call(
                 proto.ClearsignAttestorSign(payload=payload))
         return response, recorder.screens
+
+    def test_v3_schema_with_roles_and_template_is_refused(self):
+        """The attestor's screens show no roles or intent template, so it must
+        not sign a v3 schema whose wording it never displayed."""
+        self.requires_release_capability("solana-certified-review")
+        payload = bytearray(b"KKSOLSC1\x03") + RELAY_PROGRAM + b"\x01\x0d"
+        for text in (b"Attest Probe", b"join"):
+            payload += bytes([len(text)]) + text
+        payload += b"\x01" + bytes([1, len(b"Round")]) + b"Round" + b"\x00"
+        payload += b"\x00"  # no accounts
+        template = b"Join round {0}"
+        payload += bytes([len(template)]) + template
+        with self.assertRaises(CallException) as refused:
+            self.client.call(proto.ClearsignAttestorSign(payload=bytes(payload)))
+        self.assertIn("Attestor cannot review this schema version",
+                      str(refused.exception))
+        # Control: the same schema as v2 (no role, no template) is reviewable.
+        response, _ = self._attest(schema_v2([(1, b"Round", None)]), "v2")
+        self.assertEqual(len(response.signature), 64)
 
     def test_token_amount_mint_account_is_attested_before_signing(self):
         """A TOKEN_AMOUNT's mint account decides which token definition may

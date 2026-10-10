@@ -308,6 +308,23 @@ class TestMsgHive(common.KeepKeyTest):
         self.assertEqual(len(resp.raw_public_key), 33)
         self.assertIn(resp.raw_public_key[0], (2, 3), "compressed pubkey prefix")
 
+    def test_hive_show_public_key(self):
+        """The whole STM key is on the screen: confirm_ethereum_address() had
+        room for two 140 px rows and silently dropped the tail of the key."""
+        self.requires_firmware("7.15.0")
+        self.requires_message("HiveGetPublicKey")
+        self.requires_release_capability("hive-release-review")
+        self.setup_mnemonic_nopin_nopassphrase()
+
+        for role in (ROLE_OWNER, ROLE_ACTIVE, ROLE_MEMO, ROLE_POSTING):
+            expected = hive.get_public_key(
+                self.client, hive_path(role), show_display=False).public_key
+            resp = self.assert_shows_address(
+                lambda: hive.get_public_key(
+                    self.client, hive_path(role), show_display=True),
+                expected)
+            self.assertEqual(resp.public_key, expected)
+
     def test_hive_get_public_keys_all_roles(self):
         """All four role keys derive, are distinct, and STM-formatted."""
         self.requires_firmware("7.15.0")
@@ -325,10 +342,10 @@ class TestMsgHive(common.KeepKeyTest):
         self.assertEqual(single.public_key, resp.active_key)
 
     def test_hive_sign_transfer(self):
-        self.requires_release_capability("hive-release-review")
         """Transfer (op 2) signs and the signature recovers to the active key."""
         self.requires_firmware("7.15.0")
         self.requires_message("HiveSignTx")
+        self.requires_release_capability("hive-release-review")
         self.setup_mnemonic_nopin_nopassphrase()
 
         active = hive.get_public_key(self.client, hive_path(ROLE_ACTIVE), show_display=False)
@@ -367,7 +384,6 @@ class TestMsgHive(common.KeepKeyTest):
         r.assert_end()
 
     def test_hive_sign_account_create(self):
-        self.requires_release_capability("hive-release-review")
         """account_create (op 9): signs, recovers to owner key, binds the 4 keys + name.
 
         This is the attestation a Pioneer sponsor verifies before spending an ACT.
@@ -375,6 +391,7 @@ class TestMsgHive(common.KeepKeyTest):
         self.requires_firmware("7.15.0")
         self.requires_message("HiveSignAccountCreate")
         self.requires_message("HiveGetPublicKeys")
+        self.requires_release_capability("hive-release-review")
         self.setup_mnemonic_nopin_nopassphrase()
 
         # Device-derived raw keys per role, for slot-exact comparison.
@@ -490,9 +507,9 @@ class TestMsgHive(common.KeepKeyTest):
         """A path outside SLIP-0048 (e.g. BIP-44 BTC) must be rejected before
         signing — a compromised host cannot obtain a Hive signature with a
         key from another coin's derivation tree."""
-        self.requires_release_capability("hive-release-review")
         self.requires_firmware("7.15.0")
         self.requires_message("HiveSignTx")
+        self.requires_release_capability("hive-release-review")
         self.setup_mnemonic_nopin_nopassphrase()
         self._assert_sign_tx_fails(
             "Invalid Hive SLIP-0048 path",
@@ -502,9 +519,9 @@ class TestMsgHive(common.KeepKeyTest):
     def test_hive_sign_transfer_rejects_wrong_network(self):
         """Wrong SLIP-0048 network index (registry 3054' instead of the
         de-facto 13') must be rejected — keys must be Ledger-compatible."""
-        self.requires_release_capability("hive-release-review")
         self.requires_firmware("7.15.0")
         self.requires_message("HiveSignTx")
+        self.requires_release_capability("hive-release-review")
         self.setup_mnemonic_nopin_nopassphrase()
         h = 0x80000000
         self._assert_sign_tx_fails(
@@ -517,9 +534,9 @@ class TestMsgHive(common.KeepKeyTest):
         longer accepts higher-role substitution, so an owner/memo/posting
         signature would be rejected at broadcast — and the cold owner key
         must never be spent on a transfer. Unassigned roles reject too."""
-        self.requires_release_capability("hive-release-review")
         self.requires_firmware("7.15.0")
         self.requires_message("HiveSignTx")
+        self.requires_release_capability("hive-release-review")
         self.setup_mnemonic_nopin_nopassphrase()
         for role in (ROLE_OWNER, ROLE_MEMO, ROLE_POSTING, 2):  # 2' unassigned
             self._assert_sign_tx_fails(
@@ -531,11 +548,11 @@ class TestMsgHive(common.KeepKeyTest):
         """account_create/account_update must sign with the owner key ONLY —
         the sponsor's attestation check recovers to the device OWNER key, and
         account_update replaces the owner authority itself."""
-        self.requires_release_capability("hive-release-review")
         self.requires_firmware("7.15.0")
         self.requires_message("HiveSignAccountCreate")
         self.requires_message("HiveSignAccountUpdate")
         self.requires_message("HiveGetPublicKeys")
+        self.requires_release_capability("hive-release-review")
         self.setup_mnemonic_nopin_nopassphrase()
         from keepkeylib.client import CallException
         keys = hive.get_public_keys(self.client, account_index=0, show_display=False)
@@ -565,17 +582,17 @@ class TestMsgHive(common.KeepKeyTest):
     def test_hive_sign_transfer_rejects_long_memo(self):
         """Memo over the 440-byte serialization limit must fail with a
         specific error, not a generic signing failure."""
-        self.requires_release_capability("hive-release-review")
         self.requires_firmware("7.15.0")
         self.requires_message("HiveSignTx")
+        self.requires_release_capability("hive-release-review")
         self.setup_mnemonic_nopin_nopassphrase()
         self._assert_sign_tx_fails("memo too long", memo="x" * 441)
 
     def test_hive_sign_transfer_max_memo_ok(self):
-        self.requires_release_capability("hive-release-review")
         """A memo of exactly 440 bytes still signs (boundary check)."""
         self.requires_firmware("7.15.0")
         self.requires_message("HiveSignTx")
+        self.requires_release_capability("hive-release-review")
         self.setup_mnemonic_nopin_nopassphrase()
         active = hive.get_public_key(self.client, hive_path(ROLE_ACTIVE), show_display=False)
         resp = hive.sign_tx(self.client, **self._transfer_kwargs(memo="x" * 440))

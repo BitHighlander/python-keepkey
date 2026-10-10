@@ -14,6 +14,8 @@ scripts/emulator/test_stack07_regressions.py for its harness.
 import copy
 import hashlib
 
+import semver
+
 import common
 from keepkeylib import erc7730, erc7730_compiler, eip712_stream
 from keepkeylib import messages_ethereum_pb2 as eth
@@ -172,6 +174,7 @@ class TestMsgEthereumErc7730Runtime(Erc7730Harness, common.KeepKeyTest):
         super().setUp()
         self.requires_fullFeature()
         self.requires_firmware("7.15.0")
+        self.requires_release_capability("erc7730-runtime-review")
         self.setup_mnemonic_nopin_nopassphrase()
         self.client.apply_policy("AdvancedMode", 1)
 
@@ -564,6 +567,7 @@ class TestMsgEthereumErc7730Runtime(Erc7730Harness, common.KeepKeyTest):
                 if screen[0] in ("Blind signature", "Signer field")]
 
     def test_embedded_call_is_shown_under_a_blind_sign_warning(self):
+        self.requires_firmware_below("7.16.0")  # 7.16 refuses instead
         inner = bytes.fromhex("a9059cbb") + bytes(296)  # 300 bytes: no capture
         self.assertEqual(self._exec_screens(inner), [
             ("Blind signature", "The inner call is not clear-signed"),
@@ -661,7 +665,100 @@ class TestMsgEthereumErc7730Runtime(Erc7730Harness, common.KeepKeyTest):
         ])
         self.assertIn("Inner signer", [s[0] for s in self.screens])
 
+    APPROVE = "approve(address spender,uint256 amount)"
+    MAX = (1 << 256) - 1
+
+    def _exec_approve(self, amount, spender=None, with_definition=True):
+        """execTransaction carrying approve(OTHER_ADDRESS, amount) on USDC."""
+        self._exec_setup()
+        inner = erc7730_compiler.compile_calldata(
+            {"display": {"formats": {self.APPROVE: {
+                "intent": "Approve", "fields": [
+                    {"path": "spender", "label": "Spender",
+                     "format": "addressName"},
+                    {"path": "amount", "label": "Amount", "format": "raw"}]}}}},
+            self.APPROVE, 1, self.USDC)
+        inner_def = erc7730.Definition(self._envelope(inner), 1, 1, self.USDC,
+                                       inner[38:42])
+        outer_def = self._exec_outer[1]
+        call = (bytes.fromhex("095ea7b3") +
+                (spender or self._word(OTHER_ADDRESS)) + self._word(amount))
+        arguments = (self._word(self.USDC) + self._word(0) +
+                     self._word(128) + self._word(0) +
+                     self._word(len(call)) + call + bytes(-len(call) % 32))
+        catalog = erc7730.Catalog(
+            (outer_def, inner_def) if with_definition else (outer_def,))
+        return arguments, catalog
+
+    UNLIMITED = ("UNLIMITED approval",
+                 "Allow 0x" + OTHER_ADDRESS.hex() + " to spend ALL your USDC")
+
+    def _approve_screens(self):
+        return [s for s in self._first_pages()
+                if s[0] in ("UNLIMITED approval", "Contract action",
+                            "Signer field", "Inner signer", "Inner action",
+                            "Blind signature")]
+
+    def test_inner_unlimited_approve_warns_before_the_inner_review(self):
+        self.requires_release_capability("erc20-unlimited-approve-review")
+        arguments, catalog = self._exec_approve(self.MAX)
+        self._exec_certified(arguments, catalog)
+        shown = self._approve_screens()
+        self.assertEqual(shown[:2], [
+            ("Contract action", "sign multisig operation"), self.UNLIMITED])
+        self.assertEqual(shown[2][0], "Signer field")
+        self.assertEqual(shown[3][0], "Inner signer")
+        self.assertEqual([s[0] for s in self._first_pages()].count(
+            "UNLIMITED approval"), 1)
+
+    def test_declining_an_inner_unlimited_approve_signs_nothing(self):
+        self.requires_release_capability("erc20-unlimited-approve-review")
+        arguments, catalog = self._exec_approve(self.MAX)
+        outer, outer_def = self._exec_outer
+
+        def preload():
+            erc7730.preload(self.client, outer_def)
+            self._drop_setup_screenshots()
+            return b""
+        self._declined(outer, arguments, "UNLIMITED approval",
+                       preload=preload, catalog=catalog)
+        self.assertNotIn("Inner signer", [s[0] for s in self.screens])
+
+    def test_inner_finite_approve_shows_no_unlimited_warning(self):
+        arguments, catalog = self._exec_approve(self.MAX - 1)
+        self._exec_certified(arguments, catalog)
+        titles = [s[0] for s in self.screens]
+        self.assertNotIn("UNLIMITED approval", titles)
+        self.assertIn("Inner action", titles)
+
+    def test_blind_inner_unlimited_approve_still_warns_in_715(self):
+        self.requires_firmware_below("7.16.0")  # 7.16 refuses blind calls
+        self.requires_release_capability("erc20-unlimited-approve-review")
+        arguments, catalog = self._exec_approve(self.MAX,
+                                                with_definition=False)
+        self._exec_certified(arguments, catalog)
+        shown = self._approve_screens()
+        self.assertEqual(shown[:3], [
+            ("Contract action", "sign multisig operation"), self.UNLIMITED,
+            ("Blind signature", "The inner call is not clear-signed")])
+
+    def test_inner_approve_with_a_dirty_spender_word_is_refused(self):
+        self.requires_release_capability("erc20-unlimited-approve-review")
+        arguments, catalog = self._exec_approve(
+            self.MAX, spender=b"\x01" + bytes(11) + OTHER_ADDRESS)
+        outer, outer_def = self._exec_outer
+        erc7730.preload(self.client, outer_def)
+        self._drop_setup_screenshots()
+        result, _, _, _ = self._walk(
+            self._audit_start(outer, 4 + len(arguments)), b"",
+            arguments=arguments, catalog=catalog)
+        assert_failure(self, result, types.Failure_SyntaxError,
+                       "Invalid ERC-7730 embedded call")
+        self.assertNotIn("UNLIMITED approval", [s[0] for s in self.screens])
+        self.assertNotIn(types.ButtonRequest_SignTx, self.button_codes)
+
     def test_inner_call_without_a_definition_is_blind_in_715(self):
+        self.requires_firmware_below("7.16.0")  # 7.16 refuses instead
         start, arguments, outer_def, _ = self._exec_setup()
         self._exec_certified(arguments, erc7730.Catalog((outer_def,)))
         shown = [s for s in self._relevant()
@@ -918,6 +1015,7 @@ class TestMsgEthereumErc7730Runtime(Erc7730Harness, common.KeepKeyTest):
                          ["Text:\na\\x0ab\\x09c"])
 
     def test_a_raw_value_too_long_to_capture_is_shown_blind(self):
+        self.requires_firmware_below("7.16.0")  # 7.16 refuses instead
         signature = "blob(bytes data)"
         descriptor = {"display": {"formats": {signature: {
             "intent": "Blob", "fields": [
@@ -994,8 +1092,10 @@ class TestMsgEthereumErc7730Runtime(Erc7730Harness, common.KeepKeyTest):
         return erc7730.Definition(env, 1, chain, inner_program[18:38],
                                   inner_program[38:42])
 
-    def test_an_inner_definition_the_device_refuses_falls_back_to_blind(self):
-        start, arguments, outer_def, _ = self._exec_setup()
+    def _refused_inner_catalogs(self):
+        """Inner definitions the device refuses: a program it cannot run
+        (BAD_PROGRAM), one from an unloaded signer (UNTRUSTED), and an
+        untrusted one large enough to be refused on a later chunk."""
         refused = erc7730_compiler.compile_calldata(
             {"display": {"formats": {self.TRANSFER: {
                 "intent": "Transfer", "fields": [{
@@ -1021,10 +1121,15 @@ class TestMsgEthereumErc7730Runtime(Erc7730Harness, common.KeepKeyTest):
         signed_large = self._exec_inner_catalog(
             large, signer=(UNKNOWN_SIGNER_KEY, unknown))
         self.assertGreater(len(signed_large.envelope), 2 * erc7730.MAX_CHUNK)
-        for inner in (self._exec_inner_catalog(refused),
-                      self._exec_inner_catalog(
-                          clear, signer=(UNKNOWN_SIGNER_KEY, unknown)),
-                      signed_large):
+        return (self._exec_inner_catalog(refused),
+                self._exec_inner_catalog(
+                    clear, signer=(UNKNOWN_SIGNER_KEY, unknown)),
+                signed_large)
+
+    def test_an_inner_definition_the_device_refuses_falls_back_to_blind(self):
+        self.requires_firmware_below("7.16.0")  # 7.16 refuses instead
+        start, arguments, outer_def, _ = self._exec_setup()
+        for inner in self._refused_inner_catalogs():
             self._exec_certified(arguments,
                                  erc7730.Catalog((outer_def, inner)))
             shown = self._relevant()
@@ -1032,6 +1137,13 @@ class TestMsgEthereumErc7730Runtime(Erc7730Harness, common.KeepKeyTest):
                            "The inner call is not clear-signed"), shown)
             self.assertNotIn("Inner action", [s[0] for s in shown])
             self.assertEqual(shown[-1], ("Signer field", "Operation:\n0"))
+
+    def test_an_inner_definition_the_device_refuses_is_refused_from_716(self):
+        self.requires_firmware("7.16.0")
+        for inner in self._refused_inner_catalogs():
+            _, arguments, outer_def, _ = self._exec_setup()
+            self._exec_refused(arguments, erc7730.Catalog((outer_def, inner)))
+            self.assertNotIn("Inner action", [s[0] for s in self.screens])
 
     def test_inner_definition_for_another_callee_or_chain_is_refused(self):
         start, arguments, outer_def, inner_def = self._exec_setup()
@@ -1088,6 +1200,7 @@ class TestMsgEthereumErc7730Runtime(Erc7730Harness, common.KeepKeyTest):
                 "Moves:\n2 ETH", "As:\n" + authority, "Token:\n" + usdc])
 
     def test_embedded_calls_inside_an_iteration_are_shown_blind(self):
+        self.requires_firmware_below("7.16.0")  # 7.16 refuses instead
         signature = "multicall((address callee,bytes data)[] calls)"
         descriptor = {"display": {"formats": {signature: {
             "intent": "Multicall", "fields": [{
@@ -1136,7 +1249,10 @@ class TestMsgEthereumErc7730Runtime(Erc7730Harness, common.KeepKeyTest):
     def test_an_inner_value_the_calldata_does_not_carry_is_never_shown(self):
         # Without amountPath the calldata does not say what the inner call
         # moves: an inner definition that shows @.value is shown blind, while
-        # one that does not is still clear-signed.
+        # one that does not is still clear-signed. (7.16 refuses the former.)
+        # Read the version first: it re-initialises the device, which would
+        # drop the signer the setup below loads.
+        refuses = self.firmware_version() >= semver.VersionInfo.parse("7.16.0")
         _, arguments, outer_def, inner_def = self._exec_setup(amount_path=False)
         self._exec_certified(arguments, erc7730.Catalog((outer_def, inner_def)))
         self.assertIn("Inner field", [s[0] for s in self._relevant()])
@@ -1146,8 +1262,12 @@ class TestMsgEthereumErc7730Runtime(Erc7730Harness, common.KeepKeyTest):
                 "intent": "Transfer", "fields": [
                     {"path": "@.value", "label": "Moves", "format": "amount"}]}}}},
             self.TRANSFER, 1, self.USDC)
-        self._exec_certified(arguments, erc7730.Catalog(
-            (outer_def, self._exec_inner_catalog(shows_value))))
+        catalog = erc7730.Catalog(
+            (outer_def, self._exec_inner_catalog(shows_value)))
+        if refuses:
+            self._exec_refused(arguments, catalog)
+            return
+        self._exec_certified(arguments, catalog)
         shown = self._relevant()
         self.assertIn(("Blind signature",
                        "The inner call is not clear-signed"), shown)
@@ -1169,6 +1289,7 @@ class TestMsgEthereumErc7730Runtime(Erc7730Harness, common.KeepKeyTest):
                 descriptor, signature, 1, ADDRESS)
 
     def test_a_call_at_depth_two_is_shown_blind(self):
+        self.requires_firmware_below("7.16.0")  # 7.16 refuses instead
         # A Safe executing a call on a second Safe: the second Safe's
         # definition is clear-signed one level deep, and the transfer it
         # carries is shown blind. The device never fetches a depth-2
@@ -1218,6 +1339,49 @@ class TestMsgEthereumErc7730Runtime(Erc7730Harness, common.KeepKeyTest):
         self.assertEqual(shown[6][1], "Operation:\n0")
 
 
+    def _refused(self, program, arguments, message, preload=None,
+                 catalog=None):
+        """7.16+: what 7.15 showed under a blind-sign warning is refused,
+        with no warning screen and no signature, while the same transaction
+        still signs on the ordinary path."""
+        start = self._audit_start(program, 4 + len(arguments))
+        # The same transaction still signs on the ordinary path: the refusal
+        # is the definition's, not the transaction's.
+        baseline, _, _, _ = self._walk(start, arguments=arguments)
+        self.assertTrue(baseline.HasField("signature_r"))
+        envelope = self._preload(program) if preload is None else preload()
+        result, _, _, _ = self._walk(start, envelope, arguments=arguments,
+                                     catalog=catalog)
+        assert_failure(self, result, types.Failure_Other, message)
+        self.assertNotIn("Blind signature", [s[0] for s in self.screens])
+        self.assertNotIn(types.ButtonRequest_SignTx, self.button_codes)
+
+    def _exec_refused(self, arguments, catalog):
+        outer, outer_def = self._exec_outer
+
+        def preload():
+            erc7730.preload(self.client, outer_def)
+            self._drop_setup_screenshots()
+            return b""
+        self._refused(outer, arguments, "Inner call cannot be clear-signed",
+                      preload=preload, catalog=catalog)
+
+    def test_inner_call_without_a_definition_is_refused_from_716(self):
+        self.requires_firmware("7.16.0")
+        _, arguments, outer_def, _ = self._exec_setup()
+        self._exec_refused(arguments, erc7730.Catalog((outer_def,)))
+
+    def test_a_raw_value_too_long_to_capture_is_refused_from_716(self):
+        self.requires_firmware("7.16.0")
+        signature = "blob(bytes data)"
+        program = erc7730_compiler.compile_calldata(
+            {"display": {"formats": {signature: {"intent": "Blob", "fields": [
+                {"path": "data", "label": "Data", "format": "raw"}]}}}},
+            signature, 1, ADDRESS)
+        data = bytes(range(200))
+        self._refused(program, self._word(32) + self._word(len(data)) + data +
+                      bytes(-len(data) % 32), "Value too long to clear-sign")
+
     def _declined(self, program, arguments, title, preload=None,
                   catalog=None):
         envelope = self._preload(program) if preload is None else preload()
@@ -1239,8 +1403,10 @@ class TestMsgEthereumErc7730Runtime(Erc7730Harness, common.KeepKeyTest):
                 {"path": "data", "label": "Data", "format": "raw"}]}}}},
             signature, 1, ADDRESS)
         data = bytes(range(200))
-        self._declined(blob, self._word(32) + self._word(len(data)) + data +
-                       bytes(-len(data) % 32), "Blind signature")
+        blind = self.firmware_version() < semver.VersionInfo.parse("7.16.0")
+        if blind:  # 7.16 refuses these instead: no warning to decline
+            self._declined(blob, self._word(32) + self._word(len(data)) +
+                           data + bytes(-len(data) % 32), "Blind signature")
 
         signature = "send(address token,uint256 amount)"
         split = erc7730_compiler.compile_calldata(
@@ -1260,8 +1426,10 @@ class TestMsgEthereumErc7730Runtime(Erc7730Harness, common.KeepKeyTest):
             self._drop_setup_screenshots()
             return b""
         # No inner definition: the E1 warning.
-        self._declined(outer, arguments, "Blind signature", preload=preload,
-                       catalog=erc7730.Catalog((outer_def,)))
+        if blind:
+            self._declined(outer, arguments, "Blind signature",
+                           preload=preload,
+                           catalog=erc7730.Catalog((outer_def,)))
         # A refused inner definition: the warning on the blind re-run.
         refused = erc7730_compiler.compile_calldata(
             {"display": {"formats": {self.TRANSFER: {
@@ -1269,15 +1437,18 @@ class TestMsgEthereumErc7730Runtime(Erc7730Harness, common.KeepKeyTest):
                     "path": "to", "label": "Recipient", "format": "raw",
                     "visible": {"ifNotIn": ["0x" + ADDRESS.hex()]}}]}}}},
             self.TRANSFER, 1, self.USDC, executable_only=False)
-        self._declined(outer, arguments, "Blind signature", preload=preload,
-                       catalog=erc7730.Catalog(
-                           (outer_def, self._exec_inner_catalog(refused))))
+        if blind:
+            self._declined(outer, arguments, "Blind signature",
+                           preload=preload,
+                           catalog=erc7730.Catalog(
+                               (outer_def, self._exec_inner_catalog(refused))))
         # A clear-signed inner call: its field.
         self._declined(outer, arguments, "Inner field", preload=preload,
                        catalog=erc7730.Catalog((outer_def, inner_def)))
 
 
     def test_a_refused_inner_call_does_not_blind_the_next_one(self):
+        self.requires_firmware_below("7.16.0")  # 7.16 refuses instead
         # Two embedded calls: the first inner definition is refused and shown
         # blind; the second is still clear-signed with its own definition.
         signature = "execTwo(address a,bytes da,address b,bytes db)"

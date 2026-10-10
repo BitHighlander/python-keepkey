@@ -158,6 +158,59 @@ class TestEip712StreamHelpers(unittest.TestCase):
         self.assertEqual(domain.hex(), SPEC_DOMAIN_SEPARATOR)
         self.assertEqual(message.hex(), SPEC_MESSAGE_HASH)
 
+    def test_long_values_are_chunked_only_for_capable_firmware(self):
+        """Over 1 KB, a value goes in 1 KB chunks: the first names the total,
+        each later one echoes the offset asked for. Without the capability,
+        or in the domain, the host refuses rather than send a value an older
+        device would truncate."""
+        doc = {
+            "types": {
+                "EIP712Domain": [{"name": "name", "type": "string"}],
+                "Msg": [{"name": "data", "type": "bytes"},
+                        {"name": "note", "type": "string"},
+                        {"name": "list", "type": "uint8[]"}],
+            },
+            "primaryType": "Msg",
+            "domain": {"name": "x" * 1025},
+            "message": {"data": "0x" + "ab" * 1025, "note": "y" * 1024,
+                        "list": [1]},
+        }
+
+        def request(path, offset=None):
+            req = eth.EthereumTypedDataValueRequest(member_path=path)
+            if offset is not None:
+                req.value_offset = offset
+            return req
+
+        with self.assertRaisesRegex(es.Eip712Error, 'chunked values'):
+            es.value_ack(doc, request([1, 0]))
+        first = es.value_ack(doc, request([1, 0]), chunked=True)
+        self.assertEqual(first.value, b'\xab' * 1024)
+        self.assertEqual(first.value_total_length, 1025)
+        self.assertFalse(first.HasField('value_offset'))
+        last = es.value_ack(doc, request([1, 0], 1024), chunked=True)
+        self.assertEqual((last.value, last.value_offset), (b'\xab', 1024))
+        self.assertFalse(last.HasField('value_total_length'))
+        # A string is read a second time from 0.
+        again = es.value_ack(doc, request([1, 0], 0), chunked=True)
+        self.assertEqual((len(again.value), again.value_offset), (1024, 0))
+        with self.assertRaises(es.Eip712Error):
+            es.value_ack(doc, request([1, 0], 1025), chunked=True)
+        # 1024 bytes still go whole, with or without the capability.
+        for chunked in (False, True):
+            whole = es.value_ack(doc, request([1, 1]), chunked)
+            self.assertEqual(whole.value, b'y' * 1024)
+            self.assertFalse(whole.HasField('value_total_length'))
+            with self.assertRaises(es.Eip712Error):
+                es.value_ack(doc, request([1, 1], 1024), chunked)
+        with self.assertRaisesRegex(es.Eip712Error, 'domain'):
+            es.value_ack(doc, request([0, 0]), chunked=True)
+        with self.assertRaises(es.Eip712Error):
+            es.value_ack(doc, request([1, 2], 0), chunked=True)
+        doc["message"]["data"] = "0x" + "00" * (es.MAX_VALUE_BYTES + 1)
+        with self.assertRaises(es.Eip712Error):
+            es.value_ack(doc, request([1, 0]), chunked=True)
+
     def test_review_identifiers_are_exact_and_unambiguous(self):
         doc = {
             'types': {
@@ -243,6 +296,8 @@ class TestMsgEip712Streaming(common.KeepKeyTest):
             msg.address_n.append(n)
         msg.primary_type = doc['primaryType']
         msg.metamask_v4_compat = True
+        # Read before the walk: reading Features mid-walk would end it.
+        chunked = self._chunked_values()
 
         # (ButtonRequest code, framebuffer) for every screen, in order.
         self.frames = []
@@ -267,14 +322,14 @@ class TestMsgEip712Streaming(common.KeepKeyTest):
                 resp = self.client.call_raw(
                     es.build_struct_ack(es.struct_members(doc, resp.name)))
             elif isinstance(resp, eth.EthereumTypedDataValueRequest):
-                r = es.resolve_member_path(doc, list(resp.member_path))
-                ack = eth.EthereumTypedDataValueAck()
-                ack.value = (es.encode_array_length(r[1]) if r[0] == 'length'
-                             else es.encode_value(r[1], r[2]))
-                resp = self.client.call_raw(ack)
+                resp = self.client.call_raw(es.value_ack(doc, resp, chunked))
             else:
                 return resp
         raise AssertionError('walk did not terminate')
+
+    def _chunked_values(self):
+        """Whether the firmware takes values over 1 KB in chunks."""
+        return es.CHUNKED_VALUES in (self.firmware_capabilities() or ())
 
     def _assert_final_sign_screen(self, first_line):
         """Every typed-data signature ends with ONE "Sign Typed Data" screen
@@ -328,6 +383,41 @@ class TestMsgEip712Streaming(common.KeepKeyTest):
         self.client.apply_policy('AdvancedMode', 0)
         # The report entries describe typed-data fields, not the policy prompt.
         self.client.reset_screenshots()
+
+    def _assert_strings_have_distinct_screens(self, first, second):
+        doc = {
+            'types': {
+                'EIP712Domain': [],
+                'Message': [{'name': 'note', 'type': 'string'}],
+            },
+            'primaryType': 'Message', 'domain': {}, 'message': {'note': first},
+        }
+        responses, screens = [], []
+        for value in (first, second):
+            doc['message']['note'] = value
+            response = self._walk(doc)
+            self._assert_reference_signature(doc, response)
+            responses.append(response)
+            screens.append(tuple(self.frames))
+        self.assertNotEqual(responses[0].message_hash, responses[1].message_hash)
+        self.assertNotEqual(responses[0].signature, responses[1].signature)
+        self.assertFalse(screens[0] == screens[1],
+                         'Different signed values produced identical OLED screens')
+
+    def test_pipe_is_distinguishable_from_lowercase_l(self):
+        self._assert_strings_have_distinct_screens('allow', 'a||ow')
+
+    def test_pipe_after_chunk_boundary_is_distinguishable_from_lowercase_l(self):
+        if not self._chunked_values():
+            self.skipTest('firmware does not support chunked EIP-712 values')
+        self._assert_strings_have_distinct_screens(
+            'a' * 1024 + 'allow', 'a' * 1024 + 'a||ow')
+
+    def test_distinct_visible_character_changes_review_pixels(self):
+        self._assert_strings_have_distinct_screens('allow', 'a!!ow')
+
+    def test_double_quote_is_distinguishable_from_two_apostrophes(self):
+        self._assert_strings_have_distinct_screens('"', "''")
 
     def test_spec_example_matches_the_published_hashes(self):
         """The device's own hashes equal the EIP-712 reference implementation's.
@@ -535,6 +625,8 @@ class TestMsgEip712Streaming(common.KeepKeyTest):
         """SRS-7.16 §3.7: a canonical Permit2 PermitSingle is described in
         words. No raw domain or leaf screens; an unlimited allowance is
         allowed and stated, with exact dates from the signed timestamps."""
+        self.requires_firmware("7.16.0")
+        self.requires_release_capability("permit2-review")
         doc = self.UNISWAP_PERMIT2
         resp = self._walk(doc)
         self._assert_reference_signature(doc, resp)
@@ -575,7 +667,9 @@ class TestMsgEip712Streaming(common.KeepKeyTest):
     def test_permit2_names_a_vouched_spender_beside_its_address(self):
         """A KeepKey-certified name record names the spender; the full address
         is still shown, and the voucher is identified."""
+        self.requires_firmware("7.16.0")
         self.requires_message("EthereumTxMetadata")
+        self.requires_release_capability("permit2-review")
         resp = self.client.ethereum_send_tx_metadata(
             signed_payload=self.UR_V2_NAME, metadata_version=3, key_id=0x80)
         self.assertEqual(resp.classification, 1)  # VERIFIED
@@ -601,15 +695,18 @@ class TestMsgEip712Streaming(common.KeepKeyTest):
     def test_permit2_name_never_outlives_a_failed_request(self):
         """A record sent ahead of a request that FAILS is gone with it: the
         next Permit2 says "Not identified" (Copilot r1 on #919)."""
+        self.requires_firmware("7.16.0")
         self.requires_message("EthereumTxMetadata")
+        self.requires_release_capability("permit2-review")
         self.client.ethereum_send_tx_metadata(
             signed_payload=self.UR_V2_NAME, metadata_version=3, key_id=0x80)
-        refused = {  # an unlimited EIP-2612 permit: the device refuses it
+        # An unlimited EIP-2612 permit whose domain names no token
+        # (no verifyingContract): ambiguous, so the device still refuses it.
+        refused = {
             "types": {
                 "EIP712Domain": [
                     {"name": "name", "type": "string"},
                     {"name": "chainId", "type": "uint256"},
-                    {"name": "verifyingContract", "type": "address"},
                 ],
                 "Permit": [
                     {"name": "owner", "type": "address"},
@@ -620,8 +717,7 @@ class TestMsgEip712Streaming(common.KeepKeyTest):
                 ],
             },
             "primaryType": "Permit",
-            "domain": {"name": "USD Coin", "chainId": 1, "verifyingContract":
-                       "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"},
+            "domain": {"name": "USD Coin", "chainId": 1},
             "message": {
                 "owner": "0x73d0385F4d8E00C5e6504C6030F47BF6212736A8",
                 "spender": "0x66a9893cC07D91D95644AEDD05D03f95e1dBA8Af",
@@ -642,6 +738,8 @@ class TestMsgEip712Streaming(common.KeepKeyTest):
         """An exact amount is shown exactly. A PermitSingle outside the Permit2
         contract keeps the raw review, and its domain screens still appear in
         order, so nothing is hidden by the attempt to recognise it."""
+        self.requires_firmware("7.16.0")
+        self.requires_release_capability("permit2-review")
         exact = copy.deepcopy(self.UNISWAP_PERMIT2)
         exact["message"]["details"]["amount"] = "250000000"
         self._assert_reference_signature(exact, self._walk(exact))
@@ -655,66 +753,94 @@ class TestMsgEip712Streaming(common.KeepKeyTest):
             self.frames[0][1], 'EIP-712 DOMAIN', oled_text.TITLE_FONT))
         self.assertIsNotNone(self._leaf_index("details.amount"))
 
+    USDC_PERMIT = {
+        "types": {
+            "EIP712Domain": [
+                {"name": "name", "type": "string"},
+                {"name": "version", "type": "string"},
+                {"name": "chainId", "type": "uint256"},
+                {"name": "verifyingContract", "type": "address"},
+            ],
+            "Permit": [
+                {"name": "owner", "type": "address"},
+                {"name": "spender", "type": "address"},
+                {"name": "value", "type": "uint256"},
+                {"name": "nonce", "type": "uint256"},
+                {"name": "deadline", "type": "uint256"},
+            ],
+        },
+        "primaryType": "Permit",
+        "domain": {"name": "USD Coin", "version": "2", "chainId": 1,
+                   "verifyingContract":
+                       "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"},
+        "message": {
+            "owner": "0x73d0385F4d8E00C5e6504C6030F47BF6212736A8",
+            "spender": "0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD",
+            "value": "1000000", "nonce": "0", "deadline": "1893456000"},
+    }
+
+    # The canonical DAI permit (all-or-nothing `allowed`, `expiry` 0 = never).
+    DAI_PERMIT = {
+        "types": {
+            "EIP712Domain": [
+                {"name": "name", "type": "string"},
+                {"name": "version", "type": "string"},
+                {"name": "chainId", "type": "uint256"},
+                {"name": "verifyingContract", "type": "address"},
+            ],
+            "Permit": [
+                {"name": "holder", "type": "address"},
+                {"name": "spender", "type": "address"},
+                {"name": "nonce", "type": "uint256"},
+                {"name": "expiry", "type": "uint256"},
+                {"name": "allowed", "type": "bool"},
+            ],
+        },
+        "primaryType": "Permit",
+        "domain": {"name": "Dai Stablecoin", "version": "1", "chainId": 1,
+                   "verifyingContract":
+                       "0x6B175474E89094C44Da98b954EedeAC495271d0F"},
+        "message": {
+            "holder": "0x73d0385F4d8E00C5e6504C6030F47BF6212736A8",
+            "spender": "0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD",
+            "nonce": "0", "expiry": "0", "allowed": True},
+    }
+
+    def _warnings(self):
+        """Indexes of the "UNLIMITED allowance" screens (F-D, D-010)."""
+        return [i for i, (_, layout) in enumerate(self.frames)
+                if oled_text.find_line(layout, 'UNLIMITED ALLOWANCE',
+                                       oled_text.TITLE_FONT) is not None]
+
+    def _assert_unlimited_warning(self, ticker, token, deadline):
+        """Every leaf was shown; then the two warning screens, then the sign
+        screen. Screen 1: "Allow <spender> to spend an UNLIMITED amount of
+        <ticker>. It does not expire."; screen 2: ticker, token address,
+        "Signature valid until", deadline, one per line. The device pages a
+        long body by characters, so each drawn line is checked on the warning
+        pages."""
+        warnings = self._warnings()
+        self.assertGreaterEqual(len(warnings), 2)
+        final = self._assert_final_sign_screen('Sign Permit')
+        self.assertEqual(warnings[-1], final - 1)
+        pages = [self.frames[i][1] for i in warnings]
+        spender = self.USDC_PERMIT["message"]["spender"]
+        first = oled_text.wrap("Allow %s to spend an UNLIMITED amount of %s. "
+                               "It does not expire." % (spender, ticker))
+        second = oled_text.wrap("%s\n%s\nSignature valid until\n%s" %
+                                (ticker, token, deadline))
+        for line in first[:3] + ["It does not expire."] + second:
+            self.assertTrue(any(oled_text.find_line(page, line) is not None
+                                for page in pages), line)
+
     def test_unlimited_permits_are_refused_before_the_amount_screen(self):
-        """EIP-2612 Permit.value at its all-ones maximum is refused before
-        that leaf is ever displayed."""
-        permit = {
-            "types": {
-                "EIP712Domain": [
-                    {"name": "name", "type": "string"},
-                    {"name": "version", "type": "string"},
-                    {"name": "chainId", "type": "uint256"},
-                    {"name": "verifyingContract", "type": "address"},
-                ],
-                "Permit": [
-                    {"name": "owner", "type": "address"},
-                    {"name": "spender", "type": "address"},
-                    {"name": "value", "type": "uint256"},
-                    {"name": "nonce", "type": "uint256"},
-                    {"name": "deadline", "type": "uint256"},
-                ],
-            },
-            "primaryType": "Permit",
-            "domain": {"name": "USD Coin", "version": "2", "chainId": 1,
-                       "verifyingContract": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"},
-            "message": {
-                "owner": "0x73d0385F4d8E00C5e6504C6030F47BF6212736A8",
-                "spender": "0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD",
-                "value": "1000000", "nonce": "0", "deadline": "1893456000"},
-        }
-        permit2 = {
-            "types": {
-                "EIP712Domain": [
-                    {"name": "name", "type": "string"},
-                    {"name": "chainId", "type": "uint256"},
-                    {"name": "verifyingContract", "type": "address"},
-                ],
-                "PermitDetails": [
-                    {"name": "token", "type": "address"},
-                    {"name": "amount", "type": "uint160"},
-                    {"name": "expiration", "type": "uint48"},
-                    {"name": "nonce", "type": "uint48"},
-                ],
-                "PermitSingle": [
-                    {"name": "details", "type": "PermitDetails"},
-                    {"name": "spender", "type": "address"},
-                    {"name": "sigDeadline", "type": "uint256"},
-                ],
-            },
-            "primaryType": "PermitSingle",
-            "domain": {"name": "Permit2", "chainId": 1,
-                       "verifyingContract": "0x000000000022D473030F116dDEE9F6B43aC78BA3"},
-            "message": {
-                "details": {
-                    "token": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
-                    "amount": "250000000", "expiration": "1893456000",
-                    "nonce": "1"},
-                "spender": "0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD",
-                "sigDeadline": "1893456000"},
-        }
-        # Permit2 is reviewed in words instead, unlimited included
-        # (test_permit2_reads_as_who_what_until_when); only EIP-2612 is here.
-        del permit2
+        """7.15: EIP-2612 Permit.value at its all-ones maximum is refused
+        before that leaf is ever displayed. 7.16 reviews a canonical one
+        instead (F-D, D-010): test_canonical_unlimited_permits_sign_after_a_
+        warning."""
+        self.requires_firmware_below("7.16.0")
+        self.requires_capability_absent("erc20-unlimited-permit-review")
+        permit = copy.deepcopy(self.USDC_PERMIT)
         for doc, path, leaf, bits in ((permit, ("value",), "value", 256),):
             # A finite amount signs and shows the leaf; its position is where
             # the unlimited amount must stop.
@@ -727,6 +853,184 @@ class TestMsgEip712Streaming(common.KeepKeyTest):
             target[path[-1]] = str((1 << bits) - 1)
             resp = self._walk(unlimited)
             self.assertIsInstance(resp, proto.Failure)
+            self.assertEqual((resp.code, resp.message),
+                             (types.Failure_SyntaxError,
+                              'Unlimited ERC20 approval is disabled'))
+            self.assertEqual(len(self.frames), before_leaf)
+
+    def test_unlimited_permits_sign_with_unlimited_on_the_value_screen(self):
+        """7.15 (owner decision 2026-10-07): an unlimited EIP-2612 value, a
+        DAI allowed=true and a Permit2 amount at its uint160 maximum are
+        signed. The value's own screen is titled UNLIMITED APPROVAL and reads
+        UNLIMITED; a finite value keeps the ordinary screen."""
+        self.requires_firmware("7.15.0")
+        self.requires_firmware_below("7.16.0")
+        self.requires_release_capability("erc20-unlimited-permit-review")
+        usdc = copy.deepcopy(self.USDC_PERMIT)
+        usdc["message"]["value"] = str((1 << 256) - 1)
+        permit2 = copy.deepcopy(self.UNISWAP_PERMIT2)
+        cases = ((usdc, "value", "value\nuint256: UNLIMITED"),
+                 (self.DAI_PERMIT, "allowed",
+                  "allowed\nbool: UNLIMITED (allowed)"),
+                 (permit2, "details.amount",
+                  "details.amount\nuint160: UNLIMITED"))
+        for doc, leaf, body in cases:
+            self._assert_reference_signature(doc, self._walk(doc))
+            warnings = [i for i, (_, layout) in enumerate(self.frames)
+                        if oled_text.find_line(layout, 'UNLIMITED APPROVAL',
+                                               oled_text.TITLE_FONT)
+                        is not None]
+            with self.subTest(leaf):
+                self.assertEqual(warnings, [self._leaf_index(leaf)])
+                self.assertTrue(oled_text.shows(self.frames[warnings[0]][1],
+                                                body), body)
+        self._assert_reference_signature(self.USDC_PERMIT,
+                                         self._walk(self.USDC_PERMIT))
+        self.assertIsNone(oled_text.find_text(
+            [layout for _, layout in self.frames], "value\nuint256: UNLIMITED"))
+        self.assertTrue(all(
+            oled_text.find_line(layout, 'UNLIMITED APPROVAL',
+                                oled_text.TITLE_FONT) is None
+            for _, layout in self.frames))
+
+    def test_canonical_unlimited_permits_sign_after_a_warning(self):
+        """D-010 for permits (F-D): a canonical EIP-2612 permit of 2^255 or
+        more, or a canonical DAI permit with allowed=true, is signed after
+        two "UNLIMITED allowance" screens naming spender, token and deadline.
+        2^255 - 1 is an exact amount: no warning."""
+        self.requires_firmware("7.16.0")
+        self.requires_release_capability("erc20-unlimited-permit-review")
+        usdc = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+        for value in ((1 << 256) - 1, 1 << 255):
+            doc = copy.deepcopy(self.USDC_PERMIT)
+            doc["message"]["value"] = str(value)
+            self._assert_reference_signature(doc, self._walk(doc))
+            self._assert_unlimited_warning("USDC", usdc,
+                                           "2030-01-01 00:00 UTC")
+            # The amount leaf itself was still disclosed.
+            self.assertIsNotNone(self._leaf_index("value"))
+
+        exact = copy.deepcopy(self.USDC_PERMIT)
+        exact["message"]["value"] = str((1 << 255) - 1)
+        self._assert_reference_signature(exact, self._walk(exact))
+        self.assertEqual(self._warnings(), [])
+
+        dai = "0x6B175474E89094C44Da98b954EedeAC495271d0F"
+        doc = copy.deepcopy(self.DAI_PERMIT)
+        self._assert_reference_signature(doc, self._walk(doc))
+        self._assert_unlimited_warning("DAI", dai, "no deadline")
+        doc["message"]["expiry"] = "1893456000"
+        self._assert_reference_signature(doc, self._walk(doc))
+        self._assert_unlimited_warning("DAI", dai, "2030-01-01 00:00 UTC")
+        # allowed=false revokes: nothing to warn about.
+        doc["message"]["allowed"] = False
+        self._assert_reference_signature(doc, self._walk(doc))
+        self.assertEqual(self._warnings(), [])
+
+    def test_declining_the_unlimited_warning_signs_nothing(self):
+        self.requires_firmware("7.16.0")
+        self.requires_release_capability("erc20-unlimited-permit-review")
+        doc = copy.deepcopy(self.USDC_PERMIT)
+        doc["message"]["value"] = str((1 << 256) - 1)
+        msg = eth.EthereumSignTypedData()
+        for n in PATH:
+            msg.address_n.append(n)
+        msg.primary_type = doc['primaryType']
+        msg.metamask_v4_compat = True
+        resp = self.client.call_raw(msg)
+        for _ in range(400):
+            if isinstance(resp, proto.ButtonRequest):
+                time.sleep(SETTLE)
+                layout = bytes(self.client.debug.read_layout())
+                if oled_text.find_line(layout, 'UNLIMITED ALLOWANCE',
+                                       oled_text.TITLE_FONT) is not None:
+                    self.client.debug.press_no()
+                else:
+                    self.client.debug.press_yes()
+                resp = self.client.call_raw(proto.ButtonAck())
+            elif isinstance(resp, eth.EthereumTypedDataStructRequest):
+                resp = self.client.call_raw(
+                    es.build_struct_ack(es.struct_members(doc, resp.name)))
+            elif isinstance(resp, eth.EthereumTypedDataValueRequest):
+                resp = self.client.call_raw(es.value_ack(doc, resp))
+            else:
+                break
+        self.assertIsInstance(resp, proto.Failure)
+        self.assertEqual(resp.code, types.Failure_ActionCancelled)
+
+    def test_ambiguous_unlimited_permits_are_refused_before_the_amount_screen(
+            self):
+        """An unlimited permit the device cannot attribute is refused before
+        that leaf is ever displayed: a Permit whose type hash is not
+        EIP-2612's or DAI's, an EIP-2612 permit whose domain names no token,
+        and an unlimited Permit2-shaped amount outside canonical
+        PermitSingle."""
+        self.requires_firmware("7.16.0")
+        self.requires_release_capability("erc20-unlimited-permit-review")
+        no_nonce = copy.deepcopy(self.USDC_PERMIT)  # another type hash
+        no_nonce["types"]["Permit"] = [
+            m for m in no_nonce["types"]["Permit"] if m["name"] != "nonce"]
+        del no_nonce["message"]["nonce"]
+        no_token = copy.deepcopy(self.USDC_PERMIT)
+        no_token["types"]["EIP712Domain"] = [
+            m for m in no_token["types"]["EIP712Domain"]
+            if m["name"] != "verifyingContract"]
+        del no_token["domain"]["verifyingContract"]
+        no_token_dai = copy.deepcopy(self.DAI_PERMIT)
+        no_token_dai["types"]["EIP712Domain"] = [
+            m for m in no_token_dai["types"]["EIP712Domain"]
+            if m["name"] != "verifyingContract"]
+        del no_token_dai["domain"]["verifyingContract"]
+        transfer = {  # Permit2 SignatureTransfer: not reviewed in words
+            "types": {
+                "EIP712Domain": [
+                    {"name": "name", "type": "string"},
+                    {"name": "chainId", "type": "uint256"},
+                    {"name": "verifyingContract", "type": "address"},
+                ],
+                "TokenPermissions": [
+                    {"name": "token", "type": "address"},
+                    {"name": "amount", "type": "uint256"},
+                ],
+                "PermitTransferFrom": [
+                    {"name": "permitted", "type": "TokenPermissions"},
+                    {"name": "spender", "type": "address"},
+                    {"name": "nonce", "type": "uint256"},
+                    {"name": "deadline", "type": "uint256"},
+                ],
+            },
+            "primaryType": "PermitTransferFrom",
+            "domain": {"name": "Permit2", "chainId": 1, "verifyingContract":
+                       "0x000000000022D473030F116dDEE9F6B43aC78BA3"},
+            "message": {
+                "permitted": {
+                    "token": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+                    "amount": "1000000"},
+                "spender": "0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD",
+                "nonce": "0", "deadline": "1893456000"},
+        }
+        cases = (
+            (no_nonce, ("value",), "value", str((1 << 256) - 1)),
+            (no_token, ("value",), "value", str(1 << 255)),
+            (no_token_dai, ("allowed",), "allowed", True),
+            (transfer, ("permitted", "amount"), "permitted.amount",
+             str((1 << 256) - 1)),
+        )
+        for doc, path, leaf, unlimited_value in cases:
+            finite = copy.deepcopy(doc)
+            if leaf == "allowed":
+                finite["message"]["allowed"] = False
+            # A finite amount signs and shows the leaf; its position is where
+            # the unlimited amount must stop.
+            self._assert_reference_signature(finite, self._walk(finite))
+            before_leaf = self._leaf_index(leaf)
+            unlimited = copy.deepcopy(doc)
+            target = unlimited["message"]
+            for key in path[:-1]:
+                target = target[key]
+            target[path[-1]] = unlimited_value
+            resp = self._walk(unlimited)
+            self.assertIsInstance(resp, proto.Failure, leaf)
             self.assertEqual((resp.code, resp.message),
                              (types.Failure_SyntaxError,
                               'Unlimited ERC20 approval is disabled'))
@@ -747,6 +1051,182 @@ class TestMsgEip712Streaming(common.KeepKeyTest):
         resp = self._walk(doc)
         self._assert_reference_signature(doc, resp)
 
+
+    # -- Values over one ValueAck ------------------------------------------
+    # Safe MultiSend data and Snapshot proposal bodies run past 1 KB. Firmware
+    # with CAPABILITY_EIP712_CHUNKED_VALUES takes them in 1 KB chunks and
+    # shows every byte, numbered over the whole value.
+
+    def _walk_text(self, doc, tamper=None, decline=None, max_steps=600):
+        """The walk, recording each confirmation's (title, body) exactly as
+        formatted (once per confirmation, however it is paged). `tamper`
+        may rewrite a value answer; `decline` names a body prefix to reject."""
+        msg = eth.EthereumSignTypedData(address_n=PATH,
+                                        primary_type=doc['primaryType'],
+                                        metamask_v4_compat=True)
+        screens = []
+        resp = self.client.call_raw(msg)
+        for _ in range(max_steps):
+            if isinstance(resp, proto.ButtonRequest):
+                text = self.client.debug.read_confirm_text()
+                if not screens or screens[-1] != text:
+                    screens.append(text)
+                if decline and text[1].startswith(decline):
+                    self.client.debug.press_no()
+                else:
+                    self.client.debug.press_yes()
+                resp = self.client.call_raw(proto.ButtonAck())
+            elif isinstance(resp, eth.EthereumTypedDataStructRequest):
+                resp = self.client.call_raw(
+                    es.build_struct_ack(es.struct_members(doc, resp.name)))
+            elif isinstance(resp, eth.EthereumTypedDataValueRequest):
+                ack = es.value_ack(doc, resp, chunked=True)
+                if tamper:
+                    tamper(ack)
+                resp = self.client.call_raw(ack)
+            else:
+                return resp, screens
+        raise AssertionError('walk did not terminate')
+
+    @staticmethod
+    def _escaped(data):
+        """A string as the review draws it: 0x21-0x7e as itself but a
+        backslash doubled, any other byte (a space too) as \\xNN."""
+        return ''.join('\\\\' if b == 0x5c else chr(b) if 0x21 <= b <= 0x7e
+                       else '\\x%02x' % b for b in data)
+
+    def _parts(self, screens, path, type_name):
+        """The parts of `path`, checked to count 1..N in order, joined."""
+        joined, total = '', None
+        for number, (_, body) in enumerate(
+                b for b in screens if b[1].startswith(path + ' (')):
+            head, _, rest = body.partition('\n')
+            index, of = head[len(path) + 2:-1].split('/')
+            self.assertEqual(int(index), number + 1)
+            self.assertIn(total, (None, int(of)))
+            total = int(of)
+            self.assertTrue(rest.startswith(type_name + ': '), body[:60])
+            joined += rest[len(type_name) + 2:]
+        self.assertIsNotNone(total, 'no part of ' + path)
+        self.assertEqual(number + 1, total)
+        return joined, total
+
+    def _assert_signed(self, doc, resp):
+        self.assertIsInstance(resp, eth.EthereumTypedDataSignature,
+                              getattr(resp, 'message', resp))
+        domain, message, digest = reference_eip712_hashes(doc)
+        self.assertEqual(resp.domain_separator_hash.hex(), domain.hex())
+        self.assertEqual(resp.message_hash.hex(), message.hex())
+        address = self.client.ethereum_get_address(PATH)
+        self.assertEqual(recover_signer(resp.signature, digest).hex(),
+                         address.hex())
+
+    @staticmethod
+    def _blob(data_type, value):
+        return {
+            "types": {
+                "EIP712Domain": [{"name": "name", "type": "string"}],
+                "Blob": [{"name": "data", "type": data_type},
+                         {"name": "n", "type": "uint256"}],
+            },
+            "primaryType": "Blob",
+            "domain": {"name": "Blob"},
+            "message": {"data": value, "n": 7},
+        }
+
+    def test_values_over_1kb_sign_in_chunks(self):
+        """1024, 1025 and 2048 bytes, and a string with a three-byte
+        character split across the first chunk boundary: each signs with the
+        independent digest, every byte is shown once and in order, and the
+        part counter covers the whole value from its first screen."""
+        self.requires_release_capability(es.CHUNKED_VALUES)
+        euro = 'a' * 1023 + '\u20ac' + 'b' * 500
+        cases = [('bytes', bytes(range(256)) * 4),
+                 ('bytes', bytes(range(256)) * 4 + b'\xfe'),
+                 ('bytes', bytes(range(256)) * 8),
+                 ('string', ('x' * 1025).encode()),
+                 ('string', euro.encode('utf-8'))]
+        for data_type, data in cases:
+            with self.subTest(type=data_type, length=len(data)):
+                value = ('0x' + data.hex() if data_type == 'bytes'
+                         else data.decode('utf-8'))
+                doc = self._blob(data_type, value)
+                resp, screens = self._walk_text(doc)
+                self._assert_signed(doc, resp)
+                shown, parts = self._parts(screens, 'data', data_type)
+                self.assertEqual(shown, '0x' + data.hex()
+                                 if data_type == 'bytes'
+                                 else self._escaped(data))
+                self.assertGreater(parts, 1)
+
+    def test_misframed_chunks_are_refused(self):
+        """A chunk at another offset than the one asked for, or one running
+        past the total, is refused, and the session is gone."""
+        self.requires_release_capability(es.CHUNKED_VALUES)
+        doc = self._blob('bytes', '0x' + 'ab' * 1500)
+
+        def wrong_offset(ack):
+            if ack.HasField('value_offset'):
+                ack.value_offset += 1
+
+        def past_total(ack):
+            if ack.HasField('value_offset'):
+                ack.value = ack.value + b'\xab' * 100
+
+        for tamper, error in ((wrong_offset, 'EIP-712 value chunk out of order'),
+                              (past_total,
+                               'EIP-712 value chunk has the wrong length')):
+            with self.subTest(error=error):
+                resp, _ = self._walk_text(doc, tamper)
+                self.assertIsInstance(resp, proto.Failure)
+                self.assertEqual((resp.code, resp.message),
+                                 (types.Failure_SyntaxError, error))
+                stale = self.client.call_raw(eth.EthereumTypedDataValueAck(
+                    value=b'\xab' * 476, value_offset=1024))
+                self.assertIsInstance(stale, proto.Failure)
+        self._assert_signed(doc, self._walk_text(doc)[0])
+
+    def test_declining_a_part_mid_value_signs_nothing(self):
+        """Rejecting a part of the second chunk cancels; the next document
+        signs with its own digest."""
+        self.requires_release_capability(es.CHUNKED_VALUES)
+        doc = self._blob('bytes', '0x' + 'cd' * 3000)
+        resp, screens = self._walk_text(doc, decline='data (8/')
+        self.assertIsInstance(resp, proto.Failure)
+        self.assertEqual(resp.code, types.Failure_ActionCancelled)
+        self.assertTrue(screens[-1][1].startswith('data (8/'))
+        self._assert_signed(doc, self._walk_text(doc)[0])
+
+    def test_unlimited_approve_in_chunked_safe_data_warns_first(self):
+        """approve(spender, 2^256-1) heading a 3 KB SafeTx.data: the
+        UNLIMITED warning is read from the first chunk and shown before any
+        screen of the bytes."""
+        self.requires_release_capability(es.CHUNKED_VALUES)
+        self.requires_release_capability("erc20-unlimited-approve-review")
+        spender = '68b3465833fb72a70ecdf485e0e4c7bd8665fc45'
+        data = ('095ea7b3' + '00' * 12 + spender + 'ff' * 32).ljust(6000, '0')
+        doc = {
+            "types": {
+                "EIP712Domain": [{"name": "chainId", "type": "uint256"}],
+                "SafeTx": [{"name": "to", "type": "address"},
+                           {"name": "data", "type": "bytes"}],
+            },
+            "primaryType": "SafeTx",
+            "domain": {"chainId": 1},
+            "message": {"to": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+                        "data": "0x" + data},
+        }
+        resp, screens = self._walk_text(doc)
+        self._assert_signed(doc, resp)
+        titles = [title for title, _ in screens]
+        self.assertEqual(titles.count('UNLIMITED approval'), 1)
+        warning = titles.index('UNLIMITED approval')
+        first = next(i for i, (_, body) in enumerate(screens)
+                     if body.startswith('data ('))
+        self.assertLess(warning, first)
+        self.assertIn('to spend ALL your USDC', screens[warning][1])
+        self.assertEqual(self._parts(screens, 'data', 'bytes')[0],
+                         '0x' + data)
 
 if __name__ == '__main__':
     unittest.main()

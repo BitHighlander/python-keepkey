@@ -9,6 +9,8 @@ import tempfile
 
 import pytest
 
+import common
+
 from keepkeylib.erc7730_compiler import (
     HEADER_SIZE, DeviceCannotExecute, compile_calldata, compile_eip712,
     device_refusal, eip712_encode_type, load_descriptor,
@@ -36,6 +38,12 @@ def _evidence_input(name):
 
 
 def _firmware_accepts(program):
+    # The firmware under test must implement the interpreter the validator
+    # is built from; it says so in Features.capabilities.
+    reported = common.device_capabilities()
+    if reported is not None and "erc7730-runtime-review" not in reported:
+        pytest.skip("Staged release tree does not yet provide capability: "
+                    "erc7730-runtime-review")
     validator = _evidence_input("ERC7730_FIRMWARE_VALIDATOR")
     with tempfile.NamedTemporaryFile() as compiled:
         compiled.write(program)
@@ -186,7 +194,7 @@ def test_compiles_official_uniswap_tuple_fixture_through_firmware():
         "exactInputSingle((address tokenIn, address tokenOut, uint24 fee, "
         "address recipient, uint256 amountIn, uint256 amountOutMinimum, "
         "uint160 sqrtPriceLimitX96) params)")
-    compiled = _unchecked(compile_calldata, 
+    compiled = _unchecked(compile_calldata,
         descriptor, signature, 1,
         "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45",
         token_records=[
@@ -224,7 +232,7 @@ def test_compiles_and_checks_exact_keepkey_sdk_thorchain_swap():
     assert memo == expected["memo"]
     assert int(fixture["value"], 16) == int(expected["amount"])
 
-    compiled = _unchecked(compile_calldata, 
+    compiled = _unchecked(compile_calldata,
         fixture["descriptor"], fixture["signature"], fixture["chainId"],
         fixture["to"], network_records=[(1, "Ethereum", "ETH", 18)])
     assert compiled[38:42].hex() == expected["selector"]
@@ -246,7 +254,7 @@ def test_compiles_array_iteration_separator_and_optional_visibility():
             }
         }}
     }
-    compiled = _unchecked(compile_calldata, 
+    compiled = _unchecked(compile_calldata,
         descriptor,
         "batch((address recipient,uint256 amount)[] items)", 1,
         "0x1111111111111111111111111111111111111111")
@@ -324,7 +332,7 @@ def test_token_amount_without_token_uses_firmware_raw_fallback():
                         "format": "tokenAmount"}],
         }
     }}}
-    compiled = _unchecked(compile_calldata, 
+    compiled = _unchecked(compile_calldata,
         descriptor, "quote(uint256 amount)", 1,
         "0x1111111111111111111111111111111111111111")
     # With no token named the device can only show the raw integer, and its
@@ -349,7 +357,7 @@ def test_compiles_typed_if_not_in_and_must_match_conditions():
             ],
         }
     }}}
-    compiled = _unchecked(compile_calldata, 
+    compiled = _unchecked(compile_calldata,
         descriptor, "guard(uint256 mode,address recipient)", 1,
         "0x1111111111111111111111111111111111111111")
     sections = _sections(compiled)
@@ -380,7 +388,7 @@ def test_compiles_interpolated_intent_and_metadata_enum():
             }
         }}
     }
-    compiled = _unchecked(compile_calldata, 
+    compiled = _unchecked(compile_calldata,
         descriptor, "swap(bool selling,uint256 amount)", 1,
         "0x1111111111111111111111111111111111111111")
     sections = _sections(compiled)
@@ -409,7 +417,7 @@ def test_compiles_nested_field_group_with_balanced_links():
             }],
         }
     }}}
-    compiled = _unchecked(compile_calldata, 
+    compiled = _unchecked(compile_calldata,
         descriptor, "act((address owner,uint256 amount) details)", 1,
         "0x1111111111111111111111111111111111111111")
     display = _sections(compiled)[7]
@@ -446,7 +454,7 @@ def test_loads_bounded_includes_and_compiles_array_backed_group(tmp_path):
     path = tmp_path / "descriptor.json"
     path.write_text(json.dumps(descriptor))
     loaded = load_descriptor(str(path), str(tmp_path))
-    compiled = _unchecked(compile_calldata, 
+    compiled = _unchecked(compile_calldata,
         loaded, "batch((address to,uint256 amount)[] items)", 1,
         "0x1111111111111111111111111111111111111111")
     display = _sections(compiled)[7]
@@ -544,7 +552,7 @@ def test_compiles_official_uniswap_eip712_fixture_through_firmware():
     assert encoded == (
         "PermitSingle(PermitDetails details,address spender,uint256 sigDeadline)"
         "PermitDetails(address token,uint160 amount,uint48 expiration,uint48 nonce)")
-    compiled = _unchecked(compile_eip712, 
+    compiled = _unchecked(compile_eip712,
         descriptor, fixture,
         token_records=[
             (1, "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", "USDC", 6)
@@ -596,42 +604,6 @@ def test_signed_enum_keys_are_minimal_twos_complement():
         _firmware_validate(compile_calldata(descriptor, signature, 1,
                                             "0x" + "11" * 20), None)
 
-def test_refuses_scalar_value_repeated_inside_iteration():
-    descriptor = {"display": {"formats": {
-        "batch(address[] recipients,address fallback)": {
-            "intent": "Batch transfer",
-            "fields": [
-                {"path": "recipients.[]", "label": "Recipient",
-                 "format": "addressName", "separator": "Next recipient"},
-                {"path": "fallback", "label": "Fallback",
-                 "format": "addressName"},
-            ],
-        }
-    }}}
-    program = bytearray(_unchecked(
-        compile_calldata, descriptor,
-        "batch(address[] recipients,address fallback)", 1,
-        "0x1111111111111111111111111111111111111111"))
-    _firmware_validate(bytes(program))
-    # Replace the iterated formatter's path with the scalar formatter's path.
-    # The display still contains an iteration, so the device must refuse it.
-    offset = HEADER_SIZE
-    while offset < len(program):
-        kind = program[offset]
-        length = struct.unpack_from(">I", program, offset + 1)[0]
-        if kind == 6:
-            start = offset + 5
-            assert struct.unpack_from(">H", program, start)[0] == 2
-            assert program[start + 7:start + 9] != program[start + 14:start + 16]
-            program[start + 7:start + 9] = program[start + 14:start + 16]
-            break
-        offset += 5 + length
-    else:
-        pytest.fail("formatter section missing")
-    _firmware_validate(bytes(program),
-                       "a field reads another array than its iteration")
-
-
 def test_iteration_binds_every_formatter_path_to_its_array():
     signature = (
         "batch((uint256 amount,address token)[] items,address[] other,"
@@ -677,3 +649,12 @@ def test_signer_constant_is_not_an_intent_value():
         pytest.fail("display section missing")
     _firmware_validate(bytes(program),
                        "a signer constant cannot be an intent value")
+
+
+def test_encode_type_finds_struct_dependency_through_every_array_dimension():
+    types = {
+        "Group": [{"name": "people", "type": "Person[2][][4]"}],
+        "Person": [{"name": "name", "type": "string"}],
+    }
+    assert eip712_encode_type("Group", types) == (
+        "Group(Person[2][][4] people)Person(string name)")

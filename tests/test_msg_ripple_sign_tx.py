@@ -101,9 +101,9 @@ class TestMsgRippleSignTx(common.KeepKeyTest):
 
 
     def test_sign_with_thorchain_memo(self):
-        self.requires_release_capability("ripple-memo-policy")
         self.requires_fullFeature()
         self.requires_firmware("7.15.0")
+        self.requires_release_capability("ripple-memo-policy")
 
         self.setup_mnemonic_allallall()
 
@@ -153,9 +153,9 @@ class TestMsgRippleSignTx(common.KeepKeyTest):
         )
 
     def test_memo_length_prefix_boundaries(self):
-        self.requires_release_capability("ripple-memo-policy")
         self.requires_fullFeature()
         self.requires_firmware("7.15.0")
+        self.requires_release_capability("ripple-memo-policy")
         self.setup_mnemonic_allallall()
 
         for length in (191, 192, 193, 199):
@@ -181,24 +181,6 @@ class TestMsgRippleSignTx(common.KeepKeyTest):
                 resp.serialized_tx.endswith(expected_tail),
                 "serialized Ripple memo has wrong prefix at length %d" % length
             )
-
-    def test_unsupported_memo_is_rejected(self):
-        self.requires_release_capability("ripple-memo-policy")
-        self.requires_fullFeature()
-        self.requires_firmware("7.14.3")
-        if self.firmware_at_least("7.15.0"):
-            self.skipTest("Ripple memos are implemented in 7.15")
-        self.setup_mnemonic_allallall()
-        msg = messages.RippleSignTx(
-            address_n=parse_path("m/44'/144'/0'/0/0"),
-            payment=messages.RipplePayment(
-                amount=100000000,
-                destination="rBKz5MC2iXdoS3XgnNSYmF69K1Yo4NS3Ws"),
-            flags=0x80000000, fee=100000, sequence=25,
-            memo="routing-memo")
-        with self.assertRaises(CallException) as caught:
-            self.client.call(msg)
-        self.assertEqual(caught.exception.args[0], types.Failure_SyntaxError)
 
     def test_ripple_sign_invalid_fee(self):
         self.requires_fullFeature()

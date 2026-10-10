@@ -165,6 +165,7 @@ class TestMsgSolanaSignTx(common.KeepKeyTest):
         self.requires_firmware("7.15.0")
         self.requires_fullFeature()
         self.requires_message("SolanaSignMessage")
+        self.requires_release_capability("solana-runtime-review")
         self.client.wipe_device()
         self.setup_mnemonic_allallall()
         self.client.apply_policy('AdvancedMode', False)
@@ -449,6 +450,42 @@ class TestMsgSolanaSignTx(common.KeepKeyTest):
         resp = self.client.call(messages.SolanaSignTx(
             address_n=parse_path("m/44'/501'/0'/0'"), raw_tx=raw_tx))
         self.assertEqual(len(resp.signature), 64)
+
+    def test_solana_stake_addresses_fit_one_page(self):
+        """A base58 address is at most 44 characters and fits the body, so a
+        stake authorize or withdraw screen must not page it. A forced line
+        break before "to" once pushed the address tail onto a second page
+        on its own. A paged confirm asks once per page, so a repeated body
+        is a page split."""
+        self.requires_fullFeature()
+        self.requires_firmware("7.15.0")
+        self.setup_mnemonic_allallall()
+        from_pubkey = self._get_from_pubkey()
+        sysvars = [b'\xC1' * 32, b'\xC2' * 32]
+        cases = [
+            ([sysvars[0], b'\x77' * 32],
+             struct.pack('<I', 1) + b'\x88' * 32 + struct.pack('<I', 0)),
+            ([b'\x55' * 32] + sysvars + [b'\x99' * 32],
+             struct.pack('<I', 4) + struct.pack('<Q', 2000000000)),
+        ]
+        for accounts, instr_data in cases:
+            bodies = []
+            original = self.client.callback_ButtonRequest
+
+            def capture(msg):
+                bodies.append(self.client.debug.read_confirm_text()[1])
+                return original(msg)
+
+            self.client.callback_ButtonRequest = capture
+            try:
+                raw_tx = self._build_tx(from_pubkey, accounts,
+                                        self.STAKE_PROGRAM, instr_data)
+                self.client.call(messages.SolanaSignTx(
+                    address_n=parse_path("m/44'/501'/0'/0'"), raw_tx=raw_tx))
+            finally:
+                del self.client.callback_ButtonRequest
+            repeats = [b for a, b in zip(bodies, bodies[1:]) if a == b]
+            self.assertEqual([], repeats)
 
     def test_solana_sign_stake_deactivate(self):
         """Stake deactivate — OLED shows 'Deactivate stake?'. Canonical
@@ -906,6 +943,7 @@ class TestMsgSolanaSignTx(common.KeepKeyTest):
         AdvancedMode."""
         self.requires_firmware("7.15.0")  # Solana versioned (v0) parsing landed in 7.15
         self.requires_fullFeature()
+        self.requires_release_capability("solana-runtime-review")
         self.setup_mnemonic_allallall()
 
         from_pubkey = self._get_from_pubkey()
@@ -1015,6 +1053,7 @@ class TestMsgSolanaSignTx(common.KeepKeyTest):
         """
         self.requires_firmware("7.15.0")
         self.requires_fullFeature()
+        self.requires_release_capability("solana-runtime-review")
         self.setup_mnemonic_allallall()
 
         authority = self._get_from_pubkey()
@@ -1082,6 +1121,7 @@ class TestMsgSolanaSignTx(common.KeepKeyTest):
         blind/opaque signing."""
         self.requires_firmware("7.15.0")  # Solana versioned (v0) parsing landed in 7.15
         self.requires_fullFeature()
+        self.requires_release_capability("solana-runtime-review")
         self.setup_mnemonic_allallall()
 
         from_pubkey = self._get_from_pubkey()

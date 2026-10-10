@@ -27,7 +27,12 @@ import time
 import os
 import semver
 
+import oled_text
+
+from google.protobuf.message import EncodeError
 from keepkeylib.client import KeepKeyClient, KeepKeyDebuglinkClient, KeepKeyDebuglinkClientVerbose
+from keepkeylib.transport_udp import EmulatorNotResponding
+from keepkeylib import messages_pb2
 from keepkeylib import tx_api
 
 TX_FIXTURE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -55,6 +60,47 @@ def reset_screenshot_capture(client):
                 len(name) == len('btn00000.png')) or name == 'frames.json':
             os.unlink(os.path.join(screenshot_dir, name))
     client.screenshot_id = 0
+
+# Firmware before this release does not report Features.capabilities; there,
+# version gates alone decide.
+CAPABILITIES_SINCE = "7.15.0"
+
+
+def capability_names(features):
+    """Features.capabilities as names such as 'permit2-review', or None for
+    firmware that predates the list."""
+    version = semver.VersionInfo.parse("%s.%s.%s" % (
+        features.major_version, features.minor_version, features.patch_version))
+    if version < semver.VersionInfo.parse(CAPABILITIES_SINCE):
+        return None
+    enum = messages_pb2.Features.Capability
+    return set(enum.Name(value)[len("CAPABILITY_"):].lower().replace("_", "-")
+               for value in features.capabilities)
+
+
+_DEVICE_CAPABILITIES = []
+
+
+def device_capabilities():
+    """For host-side tests: the connected firmware's capabilities, read once,
+    or None when the firmware predates the list or no device is attached."""
+    if not _DEVICE_CAPABILITIES:
+        names = None
+        try:
+            client = KeepKeyClient(config.TRANSPORT(
+                *config.TRANSPORT_ARGS, **config.TRANSPORT_KWARGS))
+            try:
+                client.init_device()
+                names = capability_names(client.features)
+            finally:
+                client.close()
+        except EmulatorNotResponding:
+            raise  # a crashed emulator is an error, not "no device"
+        except Exception:
+            names = None  # no device: nothing to gate on
+        _DEVICE_CAPABILITIES.append(names)
+    return _DEVICE_CAPABILITIES[0]
+
 
 class KeepKeyTest(unittest.TestCase):
     def setUp(self):
@@ -138,6 +184,46 @@ class KeepKeyTest(unittest.TestCase):
     def tearDown(self):
         self.client.close()
 
+    def assert_shows_address(self, call, expected):
+        """Run `call`, a show_display request, and assert one of the screens
+        it confirms shows ALL of `expected` -- a known vector or the
+        show_display=False response, never the value under test. Returns
+        what `call` returns. Only where neither exists may `expected` be a
+        function of that result.
+
+        Before 7.14.3 DebugLinkState was built in the shared response arena
+        (fixed in 7.14.3 and 7.15), so reading the screen during the confirm
+        wiped a response already built. There `call` runs unwatched and
+        nothing is asserted."""
+        # Cached Features, not firmware_at_least(): its Initialize would break
+        # a caller's set_expected_responses().
+        features = self.client.features
+        if (features.major_version, features.minor_version,
+                features.patch_version) < (7, 14, 3):
+            return call()
+        screens = []
+        press = self.client.callback_ButtonRequest
+        nested = 'callback_ButtonRequest' in vars(self.client)
+
+        def capture(msg):
+            screens.append(self.client._read_oled_after_settle())
+            return press(msg)
+
+        self.client.callback_ButtonRequest = capture
+        try:
+            result = call()
+        finally:
+            if nested:  # an enclosing check is capturing too
+                self.client.callback_ButtonRequest = press
+            else:
+                del self.client.callback_ButtonRequest
+        if callable(expected):
+            expected = expected(result)
+        self.assertTrue(
+            any(oled_text.shows_address(s, expected) for s in screens),
+            "none of %d screens shows all of %r" % (len(screens), expected))
+        return result
+
     def assertEqual(self, lhs, rhs):
         if type(lhs) == type(b'') and type(rhs) == type(''):
             super(KeepKeyTest, self).assertEqual(lhs, rhs.encode('utf-8'))
@@ -162,32 +248,50 @@ class KeepKeyTest(unittest.TestCase):
         if version < semver.VersionInfo.parse(ver_required):
             self.skipTest("Firmware version " + ver_required + " or higher is required to run this test")
 
-    def requires_release_capability(self, capability):
-        """Skip only when staged CI explicitly declares a capability absent.
+    def requires_firmware_below(self, ver_limit):
+        """Skip on firmware at or above ver_limit: for behaviour a later
+        release deliberately removes, so the test pins the release it is
+        about rather than going red when the behaviour is retired."""
+        if self.firmware_version() >= semver.VersionInfo.parse(ver_limit):
+            self.skipTest("Behaviour retired in firmware " + ver_limit)
 
-        A released firmware, a developer invocation, and older firmware all
-        receive the canonical suite's normal version/device gates.  Only the
-        stacked-release workflow sets ``KK_RELEASE_MISSING_CAPABILITIES`` for
-        deliberately incomplete intermediate trees.  This keeps one canonical
-        multi-release branch without weakening the final release assertions.
+    def firmware_capabilities(self):
+        """The capabilities the connected firmware reports, as names such as
+        'permit2-review', or None for firmware that predates the list."""
+        self.client.init_device()
+        return capability_names(self.client.features)
+
+    def requires_release_capability(self, capability):
+        """Skip unless the firmware reports `capability`.
+
+        Two levels, so every firmware passes: version first (firmware before
+        CAPABILITIES_SINCE reports no list, and the test's version gates
+        decide), then the firmware's own Features.capabilities, which tells
+        apart builds of the same version such as staged release blocks.
         """
-        missing_raw = os.environ.get('KK_RELEASE_MISSING_CAPABILITIES')
-        if missing_raw is None:
-            return
-        missing = set(value.strip() for value in missing_raw.split(',')
-                      if value.strip())
-        if capability in missing:
+        enum = messages_pb2.Features.Capability
+        # A misspelt name must fail loudly, never skip quietly.
+        enum.Value("CAPABILITY_" + capability.upper().replace("-", "_"))
+        reported = self.firmware_capabilities()
+        if reported is not None and capability not in reported:
             self.skipTest(
                 "Staged release tree does not yet provide capability: " +
                 capability)
 
+    def requires_capability_absent(self, capability):
+        """Skip when the firmware reports `capability`: for a refusal that
+        the capability's behaviour replaces within the same version."""
+        enum = messages_pb2.Features.Capability
+        enum.Value("CAPABILITY_" + capability.upper().replace("-", "_"))
+        reported = self.firmware_capabilities()
+        if reported is not None and capability in reported:
+            self.skipTest("Firmware provides capability: " + capability)
+
     def requires_taproot(self):
         """Skip unless the firmware reports taproot support.
 
-        Gates on a capability rather than a version.  Which release taproot
-        ships in is still open, and a version gate that is never reached makes
-        these tests silently green forever -- the failure mode that looks
-        exactly like passing.
+        Gates on the device flag rather than a version, so a build without
+        taproot skips instead of failing.
         """
         self.client.init_device()
         if not getattr(self.client.features, 'supports_taproot', False):
@@ -298,7 +402,7 @@ class KeepKeyTest(unittest.TestCase):
             # class exists and requires_firmware already gates the version, so
             # let the real test exercise it rather than skipping.
             msg.SerializeToString()
-        except Exception:
+        except EncodeError:
             return
         try:
             resp = self.client.call_raw(msg)
@@ -306,6 +410,10 @@ class KeepKeyTest(unittest.TestCase):
                 self.skipTest("%s not supported by this firmware build" % msg_name)
             # Re-init device state after probe (some messages may have changed state)
             self.client.call_raw(base_proto.Initialize())
+        except EmulatorNotResponding:
+            raise  # a dead emulator is an error, never a skip
+        except unittest.SkipTest:
+            raise
         except Exception:
             self.skipTest("%s not supported by this firmware build" % msg_name)
 

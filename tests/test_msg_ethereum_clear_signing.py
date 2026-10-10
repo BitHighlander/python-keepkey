@@ -835,10 +835,10 @@ class TestEthereumClearSigning(common.KeepKeyTest):
 
     def setUp(self):
         super().setUp()
-        self.requires_release_capability("erc7730-runtime-review")
         self.requires_firmware("7.15.0")
         self.requires_message("EthereumTxMetadata")
         self.requires_message("LoadClearsignSigner")
+        self.requires_release_capability("erc7730-runtime-review")
         self.setup_mnemonic_nopin_nopassphrase()
         self.client.apply_policy("AdvancedMode", 1)
         self._load_ci_signer()
@@ -1031,7 +1031,13 @@ class TestEthereumClearSigning(common.KeepKeyTest):
             metadata_version=1, key_id=TEST_KEY_ID)
         self.assertEqual(resp.classification, CLASSIFICATION_VERIFIED)
 
-        if flow['key'] == 'erc20-approve-unlimited':
+        if (flow['key'] == 'erc20-approve-unlimited'
+                and not self.firmware_at_least("7.16.0")
+                and "erc20-unlimited-approve-review" not in
+                (self.firmware_capabilities() or ())):
+            # 7.15 refused an unlimited approve until
+            # erc20-unlimited-approve-review; from then it is signed after a
+            # warning, handled by the common path below.
             # Drive the wire directly: the policy is refused on the FIRST
             # response, before any ButtonRequest. Expected-response helpers
             # would raise their own exception text containing the expected
@@ -1053,6 +1059,8 @@ class TestEthereumClearSigning(common.KeepKeyTest):
             self.assertEqual(response.message,
                              'Unlimited ERC20 approval is disabled')
             return
+        if flow['key'] == 'erc20-approve-unlimited':
+            self.requires_release_capability("erc20-unlimited-approve-review")
 
         sig_v, sig_r, sig_s = self.client.ethereum_sign_tx(
             n=n, nonce=FLOW_NONCE, gas_price=FLOW_GAS_PRICE,
@@ -1303,10 +1311,10 @@ class TestClearSignV2Device(common.KeepKeyTest):
 
     def setUp(self):
         super().setUp()
-        self.requires_release_capability("erc7730-runtime-review")
         self.requires_firmware(self.V2_FIRMWARE)
         self.requires_message("EthereumTxMetadata")
         self.requires_message("LoadClearsignSigner")
+        self.requires_release_capability("erc7730-runtime-review")
         self.setup_mnemonic_nopin_nopassphrase()
         self.client.apply_policy("AdvancedMode", 1)
         self.client.load_clearsign_signer(

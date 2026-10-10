@@ -202,6 +202,23 @@ class PB:
     def finish(self):
         self._flush()
 
+def parse_report_junit(path):
+    """parse_junit, plus section L from the bitcoin-only JUnit CI writes
+    beside it: those tests only run on the bitcoin-only image and skip on
+    the full one, so the full JUnit alone shows them as withheld."""
+    results = parse_junit(path)
+    btc = os.path.join(os.path.dirname(path), 'junit-merged-bitcoin-only.xml')
+    if os.path.abspath(btc) != os.path.abspath(path) and os.path.isfile(btc):
+        # The census and missing capabilities describe the full run only.
+        census, missing = dict(JUNIT_CENSUS), set(JUNIT_MISSING_CAPABILITIES)
+        btc_results = parse_junit(btc)
+        JUNIT_CENSUS.clear(); JUNIT_CENSUS.update(census)
+        JUNIT_MISSING_CAPABILITIES.clear(); JUNIT_MISSING_CAPABILITIES.update(missing)
+        for key, status in btc_results.items():
+            if key.startswith('test_msg_bitcoin_only_variant::'):
+                results[key] = status
+    return results
+
 def _lookup(results, mod, meth):
     """Look up a test result by module::method. Every SECTIONS module is a
     test_msg_* module, so parse_junit always emits a 'mod::meth' key -- there is
@@ -220,22 +237,37 @@ def ver_ge(a, b): return ver_t(a) >= ver_t(b)
 # Tests whose newer fail-closed behavior deliberately returns before drawing a
 # confirmation screen. Keep their historical catalog text, but do not schedule
 # or audit an OLED capture once the refusal behavior is active.
+# (floor, ceiling): no capture from floor up to, not including, ceiling.
 _NO_SCREEN_FROM = {
-    ('test_msg_signtx_ethereum_erc20', 'test_approve_all'): '7.14.2',
+    # 7.14.x refuses an unlimited approve before drawing; from 7.15 it signs
+    # after an UNLIMITED APPROVAL warning, which is the evidence to capture.
+    ('test_msg_signtx_ethereum_erc20', 'test_approve_all'): ('7.14.2', '7.15.0'),
 }
+
+
+# From this release the dice ceremony is private over DebugLink.
+DICE_PRIVATE_FROM = '7.15.0'
+
+
+def _ctx_for(fw_version, ctx):
+    """A case description; a {'private': ..., 'public': ...} pair is picked by
+    whether this firmware keeps the dice ceremony private."""
+    if isinstance(ctx, dict):
+        return ctx['private' if ver_ge(fw_version, DICE_PRIVATE_FROM) else 'public']
+    return ctx
 
 
 def _screens_for(fw_version, mod, meth, screens):
     # Private dice displays cannot be captured through the interface whose
     # non-disclosure is being tested. Native known-draw fixtures cover device
     # page content; full integration still requires both wire tests to execute.
-    if (os.environ.get('KK_DICE_DEBUG_PRIVATE') == '1' and
+    if (ver_ge(fw_version, DICE_PRIVATE_FROM) and
             mod == 'test_msg_resetdevice' and meth in (
                 'test_reset_device_dice_mixed_is_verifiable',
                 'test_reset_device_dice_only_is_verifiable')):
         return []
-    floor = _NO_SCREEN_FROM.get((mod, meth))
-    if floor and ver_ge(fw_version, floor):
+    window = _NO_SCREEN_FROM.get((mod, meth))
+    if window and ver_ge(fw_version, window[0]) and not ver_ge(fw_version, window[1]):
         return []
     return screens
 
@@ -388,7 +420,12 @@ def parse_junit(path):
         cls = tc.get('classname', '')
         if tc.find('failure') is not None: status = 'fail'
         elif tc.find('error') is not None: status = 'error'
-        elif tc.find('skipped') is not None: status = 'skip'
+        elif tc.find('skipped') is not None:
+            status = 'skip'
+            reason = tc.find('skipped').get('message', '')
+            if reason.startswith(CAPABILITY_SKIP_PREFIX):
+                JUNIT_MISSING_CAPABILITIES.add(
+                    reason[len(CAPABILITY_SKIP_PREFIX):].strip())
         else: status = 'pass'
         JUNIT_CENSUS['ran'] += 1
         # 'ran' counts every collected testcase, skips included. A version-gated
@@ -473,9 +510,8 @@ def _v_catalog_tests(start_id=17):
     silently go stale (as happened when the old hand-written V17-V23 test
     names drifted from the dynamically-generated ones).
 
-    Signing entries get screenshot hints. The unlimited-approval refusal is
-    deliberately screenless: its wire assertion requires immediate Failure,
-    so setup or home frames must never be used as approval evidence.
+    Signing entries get screenshot hints, the unlimited approval included:
+    from 7.15 it signs after a warning screen.
     """
     if not CLEARSIGN_FLOWS:
         return []
@@ -488,12 +524,12 @@ def _v_catalog_tests(start_id=17):
         if f['key'] == 'erc20-approve-unlimited':
             out.append((
                 'V%d' % i, 'test_msg_ethereum_clear_signing', method,
-                'Unlimited ERC-20 approval refused before confirmation',
-                'Even with AdvancedMode and valid runtime metadata, unlimited '
-                'approval returns Failure before any ButtonRequest or signature. '
-                'The wire test requires that immediate refusal; no OLED approval '
-                'screen is expected.',
-                [],
+                'Unlimited ERC-20 approval signs after a warning',
+                'From 7.15 an unlimited approval is signed after an UNLIMITED '
+                'APPROVAL warning naming the spender and token; the signature is '
+                'checked against the device address. 7.14.x refused it before '
+                'any ButtonRequest.',
+                ['Unlimited approval warning'],
             ))
             i += 1
             continue
@@ -875,39 +911,36 @@ SECTIONS = [
      [
          ('K1', 'test_msg_resetdevice', 'test_reset_device_dice_mixed_is_verifiable',
           'Dice + device entropy, verified offline',
-          ('Strict privacy profile: the wire test checks every DebugLinkState is empty through '
+          {'private': ('Strict privacy profile: the wire test checks every DebugLinkState is empty through '
            'consent, device-word pages, input, digest, entropy acknowledgement and backup. '
            'It checks successful commit and a valid mnemonic. The firmware native '
            'DiceCeremonyPrivacy fixture supplies a known draw and independently verifies '
-           'MIXED derivation and device-side logical pages. Private screens are not captured.'
-           if os.environ.get('KK_DICE_DEBUG_PRIVATE') == '1' else
-          'Host selects MIXED (dice_entropy alone). The device shows the consent screen naming the '
+           'MIXED derivation and device-side logical pages. Private screens are not captured.'),
+           'public': ('Host selects MIXED (dice_entropy alone). The device shows the consent screen naming the '
           'mode, then its own 32-byte draw as 24 BIP-39 words BEFORE any roll, then collects 99 rolls '
           'over DebugLink with undo exercised. The test decodes the 24 words with its own '
           'checksum-verified BIP-39 decoder, recomputes '
           'seed = SHA256d(tag || draw || SHA256(tag || rolls)) from the published formula -- with the '
           'host\'s EntropyAck bytes nowhere in it -- and requires the backup words to match. That is '
           'the proof a user can repeat with tools/verify_dice_seed.py: the rolls reached the seed, '
-          'the device draw was the one it committed to, and the host contributed nothing.'),
-          ([] if os.environ.get('KK_DICE_DEBUG_PRIVATE') == '1' else
-           ['Mode consent', 'Dice entry screen', 'Digest confirmation'])),
+          'the device draw was the one it committed to, and the host contributed nothing.')},
+          ['Mode consent', 'Dice entry screen', 'Digest confirmation']),
          ('K1b', 'test_msg_resetdevice', 'test_reset_device_dice_only_is_verifiable',
           'Dice only, verified offline',
-          ('Strict privacy profile: every DebugLinkState is empty until commit. The host '
+          {'private': ('Strict privacy profile: every DebugLinkState is empty until commit. The host '
            'injects 50 rolls, sends nonzero host entropy, and verifies the committed mnemonic '
            'equals BIP39(SHA256(rolls)). Native fixtures verify the private device-side pages. '
-           'Private screens are not captured.'
-           if os.environ.get('KK_DICE_DEBUG_PRIVATE') == '1' else
-          'Host selects DICE ONLY (dice_entropy + dice_only), 50 rolls for a 12-word seed. No device '
+           'Private screens are not captured.'),
+           'public': ('Host selects DICE ONLY (dice_entropy + dice_only), 50 rolls for a 12-word seed. No device '
           'words are shown -- the rolls are the entire derivation -- and the test requires the backup '
           'words to equal BIP39(SHA256(rolls)) while sending a nonzero EntropyAck that must be '
-          'ignored. Byte-identical to Coldcard\'s Dice-Rolls-Only.'),
-          ([] if os.environ.get('KK_DICE_DEBUG_PRIVATE') == '1' else
-           ['Mode consent', 'Dice entry screen', 'Digest confirmation'])),
+          'ignored. Byte-identical to Coldcard\'s Dice-Rolls-Only.')},
+          ['Mode consent', 'Dice entry screen', 'Digest confirmation']),
          ('K1c', 'test_msg_resetdevice', 'test_reset_device_dice_rejects_biased_rolls',
           'Loaded die is refused',
           'Fifty ones -- one face on 100% of the rolls. Refused with SyntaxError before any digest '
-          'is drawn, per Coldcard\'s 30%-per-face rule, so a biased die never becomes a wallet.',
+          'is drawn: this exceeds the one-in-a-million fair-die frequency threshold. '
+          'The frequency check detects severe bias; it is not an entropy guarantee.',
           []),
          ('K1d', 'test_msg_resetdevice', 'test_reset_device_dice_only_requires_dice_entropy',
           'dice_only without dice_entropy is refused',
@@ -969,10 +1002,11 @@ SECTIONS = [
           'Bytes past the declared roll count must not affect the result, so uninitialized tail '
           'bytes of the roll buffer can never leak into seed material.',
           []),
-         ('K7b', 'Dice', 'BiasGateIsThirtyPercentPerFace',
+         ('K7b', 'Dice', 'BiasGateRefusesOnlyAtOneInAMillion',
           'Loaded-die gate threshold',
-          'Coldcard\'s rule: any face over 30% of the rolls is refused. 30/99 fails, 29/99 passes; '
-          '16/50 fails, 15/50 (exactly 30%) passes.',
+          'For every face, 25/50, 32/75, and 39/99 rolls are refused; one fewer passes. '
+          'Each threshold bounds the fair-die probability of any face reaching that count '
+          'below one in a million. This avoids rejecting ordinary fair-die sequences.',
           []),
          ('K7c', 'Dice', 'BiasGateRejectsNonDiceBytes',
           'Non-d6 bytes are refused',
@@ -1233,8 +1267,8 @@ SECTIONS = [
           ['Approval screen']),
          ('E11', 'test_msg_signtx_ethereum_erc20', 'test_approve_all',
           'ERC-20 approve unlimited',
-          'MAX_UINT256 approval. Older firmware showed an "UNLIMITED" warning; 7.14.2 and later '
-          'refuse it before drawing a confirmation screen.',
+          'MAX_UINT256 approval. 7.14.2 through 7.14.x refuse it before drawing anything. From '
+          '7.15 it signs after an UNLIMITED APPROVAL warning that names the spender and token.',
           ['Unlimited approval warning']),
          ('E12', 'test_msg_ethereum_makerdao', 'test_generate',
           'MakerDAO generate DAI', 'Complex DeFi contract interaction (MakerDAO CDP).', []),
@@ -1245,35 +1279,28 @@ SECTIONS = [
          ('E15', 'test_msg_ethereum_cfunc', 'test_sign_execTx',
           'Contract function call', 'Generic contract call signing.', []),
          ('E16', 'test_sign_typed_data', 'test_ethereum_sign_typed_data_hash',
-          'EIP-712 typed data is BLIND-signed, behind AdvancedMode',
-          'The only working EIP-712 path. The host computes both 32-byte hashes and the device '
-          'signs them, so it cannot show a recipient, an amount or a chain -- it shows the two '
-          'digests and asks whether to trust the host. The test proves both halves of the gate: '
-          'with AdvancedMode ON the signature is produced, and with it OFF the device refuses '
-          'with "Enable AdvancedMode to blind-sign typed hashes". Every EIP-712 signature a '
-          'KeepKey produces today, Permit2 approvals included, takes this path.',
+          'Precomputed EIP-712 hashes are BLIND-signed, behind AdvancedMode',
+          'For a host that sends only the two 32-byte hashes. The device cannot show a recipient, '
+          'an amount or a chain from them -- it shows the digests and asks whether to trust the '
+          'host. The test proves both halves of the gate: with AdvancedMode ON the signature is '
+          'produced, and with it OFF the device refuses with "Enable AdvancedMode to blind-sign '
+          'typed hashes". From 7.15 a host that sends the document itself gets the streamed path '
+          'in section TD, where the device reads and shows every field it signs.',
           []),
          ('E16b', 'test_sign_typed_data', 'test_ethereum_sign_x402_eip3009',
-          'Structured EIP-712 is DISABLED, and x402 EIP-3009 is refused',
-          'This entry asserted the opposite until 2026-08-21, and the report shipped it green: it '
-          'claimed the device "computes the EIP-712 hashes itself and displays every '
-          'TransferWithAuthorization field", and declared two screens for fields that are never '
-          'drawn. The test underneath had already been rewritten to assert the REFUSAL. A reader '
-          'would have concluded x402 EVM payments clear-sign. They do not.\n'
-          'What the test actually proves: Ethereum712TypesValues is answered with '
-          '"Structured EIP-712 disabled pending canonical display hardening". The JSON parser '
-          'could not guarantee the displayed value was the value hashed, so 7.14.2 withdrew the '
-          'path rather than ship it. The EIP-712 V4 reference hashes stay in the fixture, unused, '
-          'as the vector to re-assert when the streaming implementation lands (SRS-7.16 R-4.1, '
-          'R-4.2).\n'
-          'The screen list is EMPTY because a refusal draws nothing -- the evidence is the '
-          'Failure on the wire.',
+          'The legacy one-shot JSON EIP-712 endpoint stays refused',
+          'Ethereum712TypesValues is answered with "Structured EIP-712 disabled". Its JSON parser '
+          'could not guarantee that the value displayed was the value hashed, so 7.14.2 withdrew it '
+          'and 7.15 keeps it closed: structured EIP-712 goes through the streamed protocol in '
+          'section TD instead. The vector is an x402 EIP-3009 TransferWithAuthorization; its EIP-712 '
+          'V4 reference hashes stay in the fixture as an independent oracle. The screen list is '
+          'empty because a refusal draws nothing -- the evidence is the Failure on the wire.',
           []),
-         ('E17', 'test_msg_ethereum_erc20_uniswap_liquidity', 'test_sign_uni_approve_liquidity_ETH',
-          'Uniswap V2 unlimited LP-token approval refused',
+         ('E17', 'test_msg_ethereum_erc20_uniswap_liquidity', 'test_sign_uni_approve_liquidity_ETH_refused',
+          'Uniswap V2 unlimited LP-token approval refused (7.14.x)',
           'Enables AdvancedMode, then attempts an unlimited FOX/WETH LP-token approval. '
-          'The device refuses it with Failure_ActionCancelled and the explicit disabled-approval '
-          'reason before any signing consent. The refusal itself is checked on the wire.',
+          '7.14.x refuses it with Failure_ActionCancelled before any signing consent, checked on '
+          'the wire. From 7.15 unlimited approvals sign after a warning, so this skips there.',
           ['Enable Policy: AdvancedMode']),
          ('E18', 'test_msg_ethereum_erc20_uniswap_liquidity', 'test_sign_uni_add_liquidity_ETH',
           'Uniswap V2 add liquidity ETH+token',
@@ -2804,17 +2831,11 @@ SECTIONS = [
           []),
          ('L3', 'test_msg_bitcoin_only_variant', 'test_firmware_variant_names_the_bitcoin_only_product',
           'features.firmware_variant must name the product',
-          'FAILED ON THE BITCOIN-ONLY IMAGE AS MEASURED, and the failure is the finding. '
-          'firmware_variant is the only wire-visible product identifier and the whole pyk suite '
-          'gates on it: common.requires_fullFeature() skips a test when it reads "KeepKeyBTC" or '
-          '"EmulatorBTC". The bitcoin-only emulator reported plain "Emulator", so '
-          'requires_fullFeature() is dead code and every altcoin test in the directory runs '
-          'against a bitcoin-only image and fails instead of skipping. Section X of this report '
-          'states the KeepKeyBTC contract as fact. variant_getName() has two arms and only the '
-          'EMULATOR one returns a literal; the hardware arm takes the model variant name from '
-          'variant_getInfo() and has no BITCOIN_ONLY case at all, so bitcoin-only HARDWARE reports '
-          'exactly what a multi-chain device of the same model reports. The assertion is by '
-          'suffix, not against a fixed string, so it stays honest for both arms.',
+          'The bitcoin-only emulator once reported plain "Emulator", so '
+          'common.requires_fullFeature(), which skips on "KeepKeyBTC" or "EmulatorBTC", was dead '
+          'code and altcoin tests failed against the bitcoin-only image instead of skipping. The '
+          'variant now names the product on both the emulator and hardware arms. The assertion is '
+          'by suffix, not a fixed string, so it holds for both.',
           []),
          ('L4', 'test_msg_bitcoin_only_variant', 'test_altcoin_message_handlers_are_absent',
           'Every stripped chain refuses without drawing',
@@ -2890,24 +2911,14 @@ SECTIONS = [
           []),
          ('L11', 'test_msg_bitcoin_only_variant', 'test_op_return_does_not_poison_the_duplicate_detector',
           'An OP_RETURN output must not poison the duplicate detector',
-          'FAILS ON BOTH PRODUCTS, and the failure is the finding. Sign a transaction whose last '
-          'output is OP_RETURN, then sign the transaction L10 just proved is allowed, and the '
-          'device answers "WARNING: DUPLICATE TRANSACTION! Already signed a tx with the same '
-          'outputs. To try again, unplug/replug KeepKey." and aborts. signing.c calls '
-          'txin_dgst_final() once per output, but txin_dgst_save_and_reset() -- the only thing that '
-          're-initialises the SHA-256 context -- is reached only on the pay-to-address path; an '
-          'OP_RETURN output returns before it. So a transaction ending in OP_RETURN leaves the '
-          'context finalised and never re-initialised, the next transaction\'s inputs are hashed '
-          'into a finalised context, and its digest no longer matches while amount and address '
-          'still do -- precisely the (same outputs, different inputs) pattern the check exists to '
-          'flag. Fail-safe, in that it refuses rather than signs, but it refuses a legitimate '
-          'transaction and demands a replug, and every OP_RETURN-terminated transaction arms it: '
-          'that is every THORChain and Maya swap the wallet builds. Nothing had caught it because '
-          'common.KeepKeyTest wipes the device in setUp, so no existing test signs two transactions '
-          'in one session.',
+          'Sign a transaction whose last output is OP_RETURN, then sign the transaction L10 proved '
+          'is allowed: it must sign. It once failed on both products with "WARNING: DUPLICATE '
+          'TRANSACTION!", because an OP_RETURN output returned before txin_dgst_save_and_reset() '
+          're-initialised the digest context, so the next transaction hashed its inputs into a '
+          'finalised context. Every THORChain and Maya swap ends in OP_RETURN and armed it. The '
+          'common setUp wipes the device, so no other test signs two transactions in one session.',
           ['Send 0.0038 BTC to 1MJ2tj2ThBE62zXbBYA5ZaN3fdve5CPAz1 (first transaction)',
-           'CONFIRM OP_RETURN: the memo that arms the detector',
-           'WARNING: DUPLICATE TRANSACTION! Already signed a tx with the same outputs']),
+           'CONFIRM OP_RETURN: the memo that used to arm the detector']),
      ]),
     ('U', 'Storage Upgrade Preservation', '7.15.0',
      'A signed UPGRADE must never wipe. An older firmware must never parse a newer storage '
@@ -3598,10 +3609,12 @@ _TEST_MIN_VERSION = {
 }
 
 # Intermediate release-stack trees deliberately omit controls that land in a
-# later adjacent slice.  The firmware workflow records those omissions in the
-# JUnit artifact with the same capability names used by the integration tests.
-# Only these exact catalog rows are exempt while their capability is declared
-# absent; the complete release tree sets no omissions and remains strict.
+# later adjacent slice.  The firmware reports the behaviours it implements
+# (Features.capabilities); a capability-gated test skips with
+# CAPABILITY_SKIP_PREFIX + name when the device does not report it, and
+# parse_junit collects those names. Only these exact catalog rows are exempt
+# while their capability is absent; a complete release reports every
+# capability and remains strict.
 _TEST_CAPABILITY = {
     ('Storage', 'PinKdfRewrapsToActiveVersionAfterCorrectPin'):
         'storage-v19-kdf',
@@ -3621,13 +3634,16 @@ _TEST_CAPABILITY = {
         'solana-lut-attestation',
 }
 
+# Modules whose every row is gated in setUp on one staged capability.
+_MODULE_CAPABILITY = {
+    'test_msg_ethereum_erc7730_runtime': 'erc7730-runtime-review',
+}
 
-def _missing_release_capabilities():
-    return {
-        value.strip() for value in
-        os.environ.get('KK_RELEASE_MISSING_CAPABILITIES', '').split(',')
-        if value.strip()
-    }
+
+CAPABILITY_SKIP_PREFIX = 'Staged release tree does not yet provide capability: '
+# Capabilities the firmware under test did not report, from the skip reasons
+# parse_junit read (never from the environment: the device decides).
+JUNIT_MISSING_CAPABILITIES = set()
 
 
 def _active_sections(fw_version):
@@ -3665,7 +3681,8 @@ def _audit_catalog():
             assert tid not in ids, 'duplicate test id %s' % tid
             ids.add(tid)
             assert (ttl or '').strip(), '%s has no title' % tid
-            assert (ctx or '').strip(), '%s has no context -- it would render as a bare name' % tid
+            for text in (ctx.values() if isinstance(ctx, dict) else (ctx,)):
+                assert (text or '').strip(), '%s has no context -- it would render as a bare name' % tid
 
 
 def render(output_path, fw_version, results, screenshot_dir=None):
@@ -3789,7 +3806,7 @@ def render(output_path, fw_version, results, screenshot_dir=None):
             r = _lookup(results, mod, meth)
             pb.check(9, f'{tid} {meth}', r)
             pb.text(7, f'{title}  ({mod}.py)')
-            for cline in _w(ctx, 95): pb.text(7, cline)
+            for cline in _w(_ctx_for(fw_version, ctx), 95): pb.text(7, cline)
             # Embed OLED screenshots -- use _pick_best_frame for the primary image,
             # then show up to 2 more frames for multi-screen flows (signing, swaps)
             if screenshot_dir:
@@ -4002,7 +4019,24 @@ def screenshot_audit(fw_version, screenshot_root, junit_path=None):
     return (len(missing) == 0, missing)
 
 
-def validate_junit(fw_version, results, variant='full'):
+# Tests of behaviour a release deliberately removes, by the first firmware
+# version without it. They skip there (requires_firmware_below), which is not
+# a failure even in a must-run module.
+RETIRED_FROM = {
+    ('test_msg_ethereum_erc7730_runtime', m): '7.16.0' for m in (
+        'test_embedded_call_is_shown_under_a_blind_sign_warning',
+        'test_inner_call_without_a_definition_is_blind_in_715',
+        'test_a_raw_value_too_long_to_capture_is_shown_blind',
+        'test_an_inner_definition_the_device_refuses_falls_back_to_blind',
+        'test_embedded_calls_inside_an_iteration_are_shown_blind',
+        'test_a_call_at_depth_two_is_shown_blind',
+        'test_a_refused_inner_call_does_not_blind_the_next_one',
+    )
+}
+
+
+def validate_junit(fw_version, results, variant='full',
+                   missing_capabilities=None):
     """Check SECTIONS tests against JUnit results. Returns (passed, failed_list).
 
     A test is considered failed if it appears in SECTIONS for this firmware version
@@ -4012,7 +4046,8 @@ def validate_junit(fw_version, results, variant='full'):
     unless their module is in MUST_RUN_MODULES.
     """
     active = _active_sections(fw_version)
-    missing_capabilities = _missing_release_capabilities()
+    if missing_capabilities is None:
+        missing_capabilities = JUNIT_MISSING_CAPABILITIES
     failures = []
     for letter, title, mf, bg, fl, tests in active:
         for tid, mod, meth, ttl, ctx, scr in tests:
@@ -4020,8 +4055,12 @@ def validate_junit(fw_version, results, variant='full'):
             if status in ('fail', 'error'):
                 failures.append((tid, mod, meth, status))
                 continue
-            capability = _TEST_CAPABILITY.get((mod, meth))
+            capability = (_TEST_CAPABILITY.get((mod, meth)) or
+                          _MODULE_CAPABILITY.get(mod))
             if capability in missing_capabilities:
+                continue
+            if (status == 'skip' and
+                    ver_ge(fw_version, RETIRED_FROM.get((mod, meth), '99.0.0'))):
                 continue
             must_run = not (
                 variant == 'bitcoin-only' and
@@ -4107,7 +4146,7 @@ def main():
         if not args.junit:
             print('ERROR: --validate-junit requires --junit=<path>', file=sys.stderr)
             sys.exit(2)
-        results = parse_junit(args.junit)
+        results = parse_report_junit(args.junit)
         ok, failures = validate_junit(fw, results, args.variant)
         if ok:
             print(f'SECTIONS validation passed: all tests for fw {fw} are pass or skip')
@@ -4129,7 +4168,13 @@ def main():
     if supplied:
         os.environ['KK_BUILD_LABEL'] = ' | '.join(supplied)
 
-    results = parse_junit(args.junit) if args.junit else {}
+    results = parse_report_junit(args.junit) if args.junit else {}
+    # A staged control has no row of its own in a tree whose firmware reports
+    # its capability missing; show it withheld rather than pending. Rendering
+    # only: validate_junit applies the same exemption itself.
+    for (mod, meth), cap in _TEST_CAPABILITY.items():
+        if cap in JUNIT_MISSING_CAPABILITIES:
+            results.setdefault('%s::%s' % (mod, meth), 'skip')
     render(args.output, fw, results, args.screenshots)
 
 if __name__ == '__main__':
