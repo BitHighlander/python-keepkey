@@ -1434,9 +1434,11 @@ class TestZcashShieldedSigningDevice(common.KeepKeyTest):
         the amount rendered the question plus the first 76 address characters
         and silently dropped the rest along with the entire amount line.
 
-        Two ConfirmOutput requests per action is therefore the assertion that
-        matters: one screen cannot hold both, and collapsing them back into one
-        reintroduces exactly the defect.
+        The amount and the address each get a ConfirmOutput request: one
+        screen cannot hold both, and collapsing them back into one reintroduces
+        exactly the defect. The output's memo follows on a third: it is signed
+        and the recipient reads it, so it is shown too (this vector's memo is
+        not text, so the screen names it by its hash).
         """
         # The canonical 7.15 product includes the separated amount/address
         # confirmation. Exercise it instead of inheriting RC18's old skip.
@@ -1453,8 +1455,8 @@ class TestZcashShieldedSigningDevice(common.KeepKeyTest):
                    if code == proto_types.ButtonRequest_ConfirmOutput]
         # KeepKeyTest.assertEqual takes no message argument (common.py:114).
         self.assertTrue(
-            len(outputs) == 2,
-            "expected an amount screen and an address screen per shielded "
+            len(outputs) == 3,
+            "expected an amount, an address and a memo screen per shielded "
             "output; got %d ConfirmOutput screen(s). One screen cannot fit a "
             "106-character unified address plus an amount line."
             % len(outputs))
@@ -1562,8 +1564,9 @@ class TestZcashShieldedSigningDevice(common.KeepKeyTest):
         self.assertIsInstance(result, zcash_proto.ZcashSignedPCZT)
         outputs = [c for c, _ in screens
                    if c == proto_types.ButtonRequest_ConfirmOutput]
-        self.assertTrue(len(outputs) == 2,
-                        "expected 2 ConfirmOutput screens, got %d" % len(outputs))
+        # Amount, address, then the memo.
+        self.assertTrue(len(outputs) == 3,
+                        "expected 3 ConfirmOutput screens, got %d" % len(outputs))
 
     # ZIP 374 user_address. Both addresses are real librustzcash output:
     # MULTI_RECEIVER_UA is RECIPIENT plus a Sapling and a P2PKH receiver
@@ -1822,16 +1825,25 @@ class TestZcashShieldedSigningDevice(common.KeepKeyTest):
             self.assertEqual(len(result.signatures), 1)
             outputs = [(title, body) for code, title, body in screens
                        if code == proto_types.ButtonRequest_ConfirmOutput]
+            # Every shown output ends with its memo: it is signed and the
+            # recipient reads it. The first two carry the generator's filler
+            # (0xF6 repeated), which is not text and is named by its hash.
+            filler = ('Zcash Memo', 'Not text. SHA-256:\n'
+                      'F5A37585C4B78E594AD30D57BDC0675B'
+                      '7419A94FA0963D18FC4D8150FE181C99')
             expected = [
                 ('Zcash Output', 'Send shielded ZEC?\nAmount: 0.00020000 ZEC'),
                 ('Orchard address', None),
+                filler,
                 ('Zcash Output', 'Send shielded ZEC?\nAmount: 0.00030000 ZEC'),
                 ('Orchard address', None),
+                filler,
             ]
             if with_user_address:
                 expected += [
                     ('Zcash Output', 'Send shielded ZEC?\nAmount: 0.00000000 ZEC'),
                     ('Shielded recipient', MEMO_USER_ADDRESS),
+                    ('Zcash Memo', 'thanks\\x20for\\x20lunch!'),
                 ]
             expected.append(('Zcash Change',
                              'Change back to your wallet:\n0.00040000 ZEC'))
@@ -1840,7 +1852,7 @@ class TestZcashShieldedSigningDevice(common.KeepKeyTest):
                 if want is not None:
                     self.assertEqual(body, want)
             # The two rebuilt addresses differ: neither output was folded.
-            self.assertNotEqual(outputs[1][1], outputs[3][1])
+            self.assertNotEqual(outputs[1][1], outputs[4][1])
 
 
 if __name__ == '__main__':
