@@ -177,7 +177,11 @@ class TestEthereumCertifiedUniswap(common.KeepKeyTest):
     def test_unlimited_approve_to_permit2_names_uniswap_and_the_limit(self):
         data = (bytes.fromhex("095ea7b3") + b"\0" * 12 + PERMIT2 + b"\xff" * 32)
         screens = self._sign(USDC, data, APPROVE_ENVELOPE)
+        # The device's own UNLIMITED warning comes first, on every firmware
+        # that signs unlimited approvals, whatever the certified review says.
         self.assertScreens(screens, [
+            ("UNLIMITED APPROVAL", None),
+            ("UNLIMITED APPROVAL", None),
             ("UNISWAP", "Let the Uniswap approval contract spend up to UNLIMITED "
                         "USDC for trades you sign"),
             ("LIMITS", "Can spend up to\nUNLIMITED USDC"),
@@ -185,7 +189,7 @@ class TestEthereumCertifiedUniswap(common.KeepKeyTest):
             ("SPENDER", None),
             ("KEEPKEY CLEARSIGN", "Described by KeepKey Alpha 716 A9531B9D\n"
                                   "certified by KeepKey"),
-            ("TRANSACTION", None),
+            ("TX ON BASE", None),
         ])
 
     def test_real_base_swap_reads_as_swap_with_limits_and_allowance(self):
@@ -200,7 +204,7 @@ class TestEthereumCertifiedUniswap(common.KeepKeyTest):
             ("CONTRACT", None),
             ("KEEPKEY CLEARSIGN", "Described by KeepKey Alpha 716 A9531B9D\n"
                                   "certified by KeepKey"),
-            ("TRANSACTION", None),
+            ("TX ON BASE", None),
         ])
 
     def test_token_to_eth_past_the_first_chunk_is_reviewed_after_the_last_byte(self):
@@ -208,7 +212,7 @@ class TestEthereumCertifiedUniswap(common.KeepKeyTest):
         screens = self._sign(ROUTER_212, USDC_TO_ETH_CALLDATA, UR212_ENVELOPE)
         # The fee screen comes first: the swap is reviewed once every byte is in.
         self.assertScreens(screens, [
-            ("TRANSACTION", None),
+            ("TX ON BASE", None),
             ("UNISWAP", "Swap 26.907974 USDC for at least 0.00984050230885008 ETH"),
             ("LIMITS", "You spend\n26.907974 USDC"),
             ("LIMITS", "You receive at least\n0.00984050230885008 ETH"),

@@ -328,8 +328,13 @@ class TestMsgEip712Streaming(common.KeepKeyTest):
         raise AssertionError('walk did not terminate')
 
     def _chunked_values(self):
-        """Whether the firmware takes values over 1 KB in chunks."""
-        return es.CHUNKED_VALUES in (self.firmware_capabilities() or ())
+        """Whether the firmware takes values over 1 KB in chunks.
+
+        Read from the Features cached when the session opened, not with a new
+        Initialize: that ends the session a record sent ahead of the request
+        belongs to, and the device drops the record with it."""
+        return es.CHUNKED_VALUES in (
+            common.capability_names(self.client.features) or ())
 
     def _assert_final_sign_screen(self, first_line):
         """Every typed-data signature ends with ONE "Sign Typed Data" screen
