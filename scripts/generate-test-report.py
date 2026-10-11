@@ -4033,6 +4033,10 @@ RETIRED_FROM = {
         'test_a_refused_inner_call_does_not_blind_the_next_one',
     )
 }
+# From 7.15 an unlimited LP approval signs after a warning; the refusal test
+# stops at 7.16 while its module becomes must-run there.
+RETIRED_FROM[('test_msg_ethereum_erc20_uniswap_liquidity',
+              'test_sign_uni_approve_liquidity_ETH_refused')] = '7.16.0'
 
 
 def validate_junit(fw_version, results, variant='full',
