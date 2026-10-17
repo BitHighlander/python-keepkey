@@ -8,6 +8,7 @@
 
 """Adversarial disclosure tests for security-relevant Solana instructions."""
 
+import hashlib
 import struct
 
 import common
@@ -15,9 +16,12 @@ import pytest
 
 from keepkeylib import messages_solana_pb2 as solana
 from Crypto.Signature import eddsa
+from ecdsa import SECP256k1, SigningKey
+from ecdsa.util import sigencode_string
+from keepkeylib import signed_metadata
 from keepkeylib.client import CallException
 from keepkeylib.tools import b58encode, parse_path
-from oled_text import find_line, find_text
+from oled_text import TITLE_FONT, find_line, find_text
 from test_msg_display_disclosure import ScreenRecorder
 
 
@@ -168,6 +172,10 @@ class TestSolanaInstructionDisclosure(common.KeepKeyTest):
         mint_at = find_text(screens, "Token mint\n" + b58encode(mint))
         self.assertIsNotNone(mint_at)
         self.assertGreater(mint_at, source_at)
+        send_at = find_text(
+            screens, "Send 1.5 tokens to " + b58encode(destination) + "?")
+        self.assertIsNotNone(send_at)
+        self.assertGreater(send_at, mint_at)
         self.assertFalse(any(find_line(screen, "Transfer fee") for screen in screens))
 
     def test_token_2022_transfer_checked_with_fee_shows_fee(self):
@@ -180,9 +188,83 @@ class TestSolanaInstructionDisclosure(common.KeepKeyTest):
         screens = self._sign_and_record(
             self._token_2022_transfer(source, mint, destination, data),
             "token-2022-transfer-fee")
+        mint_at = find_text(screens, "Token mint\n" + b58encode(mint))
+        self.assertIsNotNone(mint_at)
+        fee_at = find_text(
+            screens, "Transfer fee 0.0025 tokens\ndeducted from amount sent")
+        self.assertIsNotNone(fee_at)
+        send_at = find_text(
+            screens, "Send 1.5 tokens to " + b58encode(destination) + "?")
+        self.assertIsNotNone(send_at)
+        self.assertLess(mint_at, fee_at)
+        self.assertLess(fee_at, send_at)
+
+    def test_token_2022_fee_above_amount_is_opaque(self):
+        """Token-2022 withholds at most the amount and fails the transfer on
+        any other fee, so a signed fee above the amount would be a false
+        screen: refused with AdvancedMode off. A fee equal to the amount is the
+        real upper bound and clear-signs."""
+        self.requires_firmware("7.17.0")
+        source, mint, destination = b"\x25" * 32, b"\x36" * 32, b"\x47" * 32
+        with_fee = lambda fee: (bytes([26, 1]) + struct.pack("<Q", 1) +
+                                bytes([6]) + struct.pack("<Q", fee))
+        with pytest.raises(CallException):
+            self.client.call(self._request(self._token_2022_transfer(
+                source, mint, destination, with_fee(1000))))
+        screens = self._sign_and_record(
+            self._token_2022_transfer(source, mint, destination, with_fee(1)),
+            "token-2022-fee-equals-amount")
         self.assertIsNotNone(find_text(
-            screens, "Transfer fee 0.0025 tokens\ndeducted from amount sent"))
-        self.assertIsNotNone(find_text(screens, "Token mint\n" + b58encode(mint)))
+            screens, "Transfer fee 0.000001 tokens\ndeducted from amount sent"))
+
+    def test_token_2022_transfer_attested_symbol(self):
+        """A token definition attested by a loaded signer names a Token-2022
+        mint as it does an SPL one: the signer screen, then the fee and the
+        amount in that symbol. Runtime signers require AdvancedMode; the
+        review is still clear, never the Blind Sign screen."""
+        self.requires_firmware("7.17.0")
+        self.requires_message("LoadClearsignSigner")
+        self.client.apply_policy("AdvancedMode", True)
+        self.client.load_clearsign_signer(
+            key_id=3, pubkey=signed_metadata.test_signer_compressed_pubkey(),
+            alias="CI Test")
+        source, mint, destination = b"\x25" * 32, b"\x36" * 32, b"\x47" * 32
+        preimage = (b"KeepKeySolanaTokenDef/1" + mint + struct.pack("<I", 6) +
+                    b"T22")
+        signature = SigningKey.from_string(
+            signed_metadata.TEST_PRIVATE_KEY, curve=SECP256k1
+        ).sign_digest_deterministic(hashlib.sha256(preimage).digest(),
+                                    hashfunc=hashlib.sha256,
+                                    sigencode=sigencode_string)
+        data = (bytes([26, 1]) + struct.pack("<Q", 1500000) + bytes([6]) +
+                struct.pack("<Q", 2500))
+        raw_tx = self._token_2022_transfer(source, mint, destination, data)
+        request = self._request(raw_tx)
+        request.token_info.extend([solana.SolanaTokenInfo(
+            mint=mint, symbol="T22", decimals=6, signature=signature,
+            signer_key_id=3)])
+        recorder = ScreenRecorder(self.client, answer=True,
+                                  screenshot_group="token-2022-attested")
+        with recorder:
+            response = self.client.call(request)
+        eddsa.new(eddsa.import_public_key(self.signer), "rfc8032").verify(
+            raw_tx[1:], bytes(response.signature))
+        screens = recorder.screens
+        signer_at = next((i for i, screen in enumerate(screens)
+                          if find_line(screen, 'Token "T22"') is not None),
+                         None)
+        self.assertIsNotNone(signer_at)
+        self.assertIsNotNone(find_line(screens[signer_at], "by CI Test"))
+        fee_at = find_text(
+            screens, "Transfer fee 0.0025 T22\ndeducted from amount sent")
+        self.assertIsNotNone(fee_at)
+        send_at = find_text(
+            screens, "Send 1.5 T22 to " + b58encode(destination) + "?")
+        self.assertIsNotNone(send_at)
+        self.assertLess(signer_at, fee_at)
+        self.assertLess(fee_at, send_at)
+        self.assertFalse(any(find_line(screen, "BLIND SIGN", TITLE_FONT)
+                             for screen in screens))
 
     def test_token_2022_transfer_fields_change_oled_review(self):
         """Each signed field of the Token-2022 transfer, and the program
