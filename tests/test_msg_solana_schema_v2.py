@@ -146,6 +146,7 @@ JOIN_MAX_FEE = "Max priority fee\n0.000200000 SOL"
 INCOMPLETE_PROOF = "Incomplete certified Solana ClearSign proof"
 INVALID_CERTIFICATE = "Invalid certified Solana certificate"
 SCHEMA_MISMATCH = "Certified Solana schema does not match transaction"
+INVALID_LUT_PROOF = "Invalid certified Solana LUT proof"
 
 
 def sign(preimage):
@@ -196,6 +197,30 @@ def soltoshi_join(signer, priced=False):
         msg[after_limit:after_limit] = (bytes([10, 0, 9, 3]) +
                                         struct.pack("<Q", JOIN_PRICE))
     return bytes(msg)
+
+
+def instruction_accounts(message):
+    """Offset of each instruction's account-index list in a legacy message
+    (every count here fits one compact-u16 byte)."""
+    pos = 4 + 32 * message[3] + 32
+    count, pos = message[pos], pos + 1
+    offsets = []
+    for _ in range(count):
+        accounts = message[pos + 1]
+        offsets.append(pos + 2)
+        pos += 2 + accounts
+        pos += 1 + message[pos]
+    return offsets
+
+
+def with_lookup(message, uses):
+    """The legacy `message` as v0 with one lookup table that loads one
+    writable key, which each (instruction, account slot) in `uses` names."""
+    msg = bytearray(message)
+    offsets = instruction_accounts(message)
+    for ix, slot in uses:
+        msg[offsets[ix] + slot] = message[3]  # the first loaded key
+    return b"\x80" + bytes(msg) + b"\x01" + b"\x55" * 32 + b"\x01\x00\x00"
 
 
 def sdice_definition(signature=SDICE_DEFINITION_SIG):
@@ -300,6 +325,10 @@ class TestSolanaSchemaCertified(SchemaReview):
             "relay")
         self.assertEqual(len(base.signature), 64)
         self.assertNotShown(base_screens, send)
+        # The runtime Identity screen ("... NOT verified by KeepKey.") is
+        # never part of a certified review.
+        self.assertFalse([s for s in base_screens
+                          if find_line(s, "IDENTITY", TITLE_FONT)])
 
         response, screens = self._review(
             self._certified(relay_message(self.signer,
@@ -519,6 +548,58 @@ class TestSolanaSchemaCertified(SchemaReview):
         request.schema_signature = SOLTOSHI_SCHEMA_SIG[:63]
         self.assertRefused(request, SCHEMA_MISMATCH)
 
+    # Lookup tables without a lookup proof (7.17): the join as a v0 message
+    # whose lookup table supplies one account. The join is instruction 2,
+    # its SDICE mint is account slot 3, and instruction 1 is the Transfer to
+    # the session key.
+    JOIN_IX, JOIN_MINT_SLOT, JOIN_HIDDEN_SLOT, TRANSFER_IX = 2, 3, 1, 1
+
+    def test_certified_lookup_in_hidden_role_reviews_every_screen(self):
+        """The lookup key fills an account the review never shows: the same
+        certified review as the static join, AdvancedMode off, and the
+        device signs the v0 message."""
+        self.requires_firmware("7.17.0")
+        self.requires_release_capability("solana-certified-review")
+        raw = with_lookup(soltoshi_join(self.signer),
+                          [(self.JOIN_IX, self.JOIN_HIDDEN_SLOT)])
+        response, screens = self._review(
+            self._join_request(raw, [sdice_definition()]), "join_lookup")
+        self.assertScreens(screens, self._join_review(SDICE_TRUSTED))
+        self.assertSignedBy(response, raw)
+
+    def test_certified_lookup_supplying_a_shown_account_refused(self):
+        """The SDICE mint every amount is shown in, taken from the lookup
+        table: refused before any screen, never blind-signed."""
+        self.requires_firmware("7.17.0")
+        raw = with_lookup(soltoshi_join(self.signer),
+                          [(self.JOIN_IX, self.JOIN_MINT_SLOT)])
+        self.assertRefused(self._join_request(raw, [sdice_definition()]),
+                           SCHEMA_MISMATCH)
+
+    def test_certified_lookup_mixed_with_lookup_companion_refused(self):
+        """A hidden lookup key in the join is fine, but the Transfer the
+        review shows may not send to a lookup key."""
+        self.requires_firmware("7.17.0")
+        raw = with_lookup(soltoshi_join(self.signer),
+                          [(self.JOIN_IX, self.JOIN_HIDDEN_SLOT),
+                           (self.TRANSFER_IX, 1)])
+        self.assertRefused(self._join_request(raw, [sdice_definition()]),
+                           SCHEMA_MISMATCH)
+
+    def test_certified_lookup_proof_when_sent_is_still_checked(self):
+        """A lookup proof is optional, but one that is sent must verify: a
+        bad one is refused, not ignored in favour of the proof-less rule,
+        with or without a lookup table in the message."""
+        self.requires_firmware("7.17.0")
+        for raw in (with_lookup(soltoshi_join(self.signer),
+                                [(self.JOIN_IX, self.JOIN_HIDDEN_SLOT)]),
+                    soltoshi_join(self.signer)):
+            request = self._join_request(raw, [sdice_definition()])
+            request.lut_account.append(b"\x55" * 32)
+            request.lut_signature = b"\x01" * 64
+            request.lut_signer_key_id = 128
+            self.assertRefused(request, INVALID_LUT_PROOF)
+
 
 class TestSolanaSchemaRuntime(SchemaReview):
 
@@ -627,6 +708,24 @@ class TestSolanaSchemaRuntime(SchemaReview):
             self.client.call(valid)
         self.assertIn("Invalid Solana instruction schema", str(refused.exception))
         self.assertEqual(recorder.screens, [])
+
+    def test_runtime_schema_identity_is_not_verified_by_keepkey(self):
+        """The provider's schema opens with the EVM runtime Identity screen,
+        word for word: the alias quoted, the key's fingerprint, and NOT
+        verified by KeepKey. 7.16 showed the alias and fingerprint alone."""
+        self.requires_firmware("7.17.0")
+        self._load_signers()
+        fp = hashlib.sha256(
+            signed_metadata.test_signer_compressed_pubkey()).hexdigest()
+        identity = ("'CI Test' (%s) describes this tx. NOT verified by "
+                    "KeepKey." % fp[:16].upper())
+        response, screens = self._review(solana.SolanaSignTx(
+            address_n=PATH, raw_tx=relay_message(self.signer, [RELAY_IX]),
+            schema_payload=RELAY_SCHEMA, schema_signature=sign(RELAY_SCHEMA),
+            schema_signer_key_id=3), "runtime_identity")
+        self.assertEqual(len(response.signature), 64)
+        self.assertEqual(self.assertShows(screens, "IDENTITY", identity), 0)
+        self.assertIsNone(find_line(screens[0], "SCHEMA SIGNER", TITLE_FONT))
 
     def _join(self):
         """The join with account 0 set to this device's key and the Transfer
