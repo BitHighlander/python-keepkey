@@ -628,6 +628,24 @@ class TestSolanaSchemaRuntime(SchemaReview):
         self.assertIn("Invalid Solana instruction schema", str(refused.exception))
         self.assertEqual(recorder.screens, [])
 
+    def test_runtime_schema_identity_is_not_verified_by_keepkey(self):
+        """The provider's schema opens with the EVM runtime Identity screen,
+        word for word: the alias quoted, the key's fingerprint, and NOT
+        verified by KeepKey. 7.16 showed the alias and fingerprint alone."""
+        self.requires_firmware("7.17.0")
+        self._load_signers()
+        fp = hashlib.sha256(
+            signed_metadata.test_signer_compressed_pubkey()).hexdigest()
+        identity = ("'CI Test' (%s) describes this tx. NOT verified by "
+                    "KeepKey." % fp[:16].upper())
+        response, screens = self._review(solana.SolanaSignTx(
+            address_n=PATH, raw_tx=relay_message(self.signer, [RELAY_IX]),
+            schema_payload=RELAY_SCHEMA, schema_signature=sign(RELAY_SCHEMA),
+            schema_signer_key_id=3), "runtime_identity")
+        self.assertEqual(len(response.signature), 64)
+        self.assertEqual(self.assertShows(screens, "IDENTITY", identity), 0)
+        self.assertIsNone(find_line(screens[0], "SCHEMA SIGNER", TITLE_FONT))
+
     def _join(self):
         """The join with account 0 set to this device's key and the Transfer
         dropped: the runtime path refuses any Transfer companion."""
