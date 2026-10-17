@@ -1132,6 +1132,9 @@ def _abi_walk(nodes, steps):
 
 def device_refusal(program, capabilities=DEVICE_CAPABILITIES):
     """Why the device would refuse `program` at preload, or None."""
+    # Header byte 6 holds flags: TRAILING_DATA alone, for calldata alone.
+    if program[6] & ~TRAILING_DATA or (program[6] and program[7] != 1):
+        return "program header flags are not executed"
     if program[6] and not capabilities.get("trailing_data"):
         return "trailing data is not executed"
     sections = _program_sections(program)

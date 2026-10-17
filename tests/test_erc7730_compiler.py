@@ -8,6 +8,7 @@ import struct
 import tempfile
 
 import pytest
+import semver
 
 import common
 
@@ -51,6 +52,14 @@ def _firmware_accepts(program):
         return subprocess.call([validator, compiled.name],
                                stdout=subprocess.DEVNULL,
                                stderr=subprocess.DEVNULL) == 0
+
+
+def _requires_firmware(version):
+    """Skip a firmware-acceptance check on firmware older than `version`,
+    whose validator refuses what this mirror (DEVICE_CAPABILITIES) accepts."""
+    reported = common.device_firmware_version()
+    if reported is not None and reported < semver.VersionInfo.parse(version):
+        pytest.skip("Firmware version %s or higher is required" % version)
 
 
 def _unchecked(compile, *args, **kwargs):
@@ -569,6 +578,7 @@ def test_compiles_official_uniswap_eip712_fixture_through_firmware():
 
 
 def test_typed_data_reads_only_its_to_container():
+    _requires_firmware("7.17.0")  # 7.16 reads no typed-data container
     # @.to in typed data is the domain's verifyingContract; @.from and
     # @.value have no typed-data meaning the device reads.
     typed = {
@@ -595,6 +605,7 @@ def test_typed_data_reads_only_its_to_container():
 
 
 def test_trailing_data_flag_is_header_byte_6_for_calldata_only():
+    _requires_firmware("7.17.0")  # 7.16 refuses calldata after the arguments
     signature = "deposit(uint256 assets)"
     descriptor = {"display": {"formats": {signature: {
         "intent": "Deposit", "fields": [
@@ -615,6 +626,30 @@ def test_trailing_data_flag_is_header_byte_6_for_calldata_only():
         compile_eip712({"display": {"formats": {"Mail(uint256 a)": {
             "intent": "Mail", "fields": []}}}}, typed, address=address,
             trailing_data=True)
+
+
+def test_mirror_refuses_the_header_flags_the_device_refuses():
+    # Byte 6 holds TRAILING_DATA alone, and only a calldata program may set
+    # it: the mirror refuses every other value as the device does.
+    _requires_firmware("7.17.0")  # 7.16 accepts byte 6 = 1 on any kind
+    signature = "deposit(uint256 assets)"
+    calldata = compile_calldata({"display": {"formats": {signature: {
+        "intent": "Deposit", "fields": [
+            {"path": "assets", "label": "Assets", "format": "raw"}]}}}},
+        signature, 1, "0x" + "11" * 20)
+    typed = compile_eip712({"display": {"formats": {"Mail(uint256 a)": {
+        "intent": "Mail", "fields": [
+            {"path": "a", "label": "A", "format": "raw"}]}}}}, {
+        "types": {"EIP712Domain": [{"name": "chainId", "type": "uint256"}],
+                  "Mail": [{"name": "a", "type": "uint256"}]},
+        "primaryType": "Mail", "domain": {"chainId": 1},
+        "message": {"a": 1}}, address="0x" + "11" * 20)
+    flagged = lambda program, flags: program[:6] + bytes([flags]) + program[7:]
+    refusal = "program header flags are not executed"
+    for flags in (2, 3, 0x80):
+        _firmware_validate(flagged(calldata, flags), refusal)
+    _firmware_validate(typed)
+    _firmware_validate(flagged(typed, 1), refusal)
 
 
 def test_mirror_applies_the_devices_abi_and_text_limits():
