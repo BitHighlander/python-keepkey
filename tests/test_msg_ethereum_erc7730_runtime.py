@@ -730,11 +730,24 @@ class TestMsgEthereumErc7730Runtime(Erc7730Harness, common.KeepKeyTest):
         self.assertNotIn("Inner signer", [s[0] for s in self.screens])
 
     def test_inner_finite_approve_shows_no_unlimited_warning(self):
-        arguments, catalog = self._exec_approve(self.MAX - 1)
+        # 2^255 - 1: finite under every firmware's threshold.
+        arguments, catalog = self._exec_approve((1 << 255) - 1)
         self._exec_certified(arguments, catalog)
         titles = [s[0] for s in self.screens]
         self.assertNotIn("UNLIMITED approval", titles)
         self.assertIn("Inner action", titles)
+
+    def test_inner_approve_uses_the_top_level_threshold(self):
+        # 7.17: an embedded approve of 2^255 or more is UNLIMITED, as a
+        # top-level one is (7.16 warned only at 2^256 - 1).
+        self.requires_firmware("7.17.0")
+        arguments, catalog = self._exec_approve(1 << 255)
+        self._exec_certified(arguments, catalog)
+        shown = self._approve_screens()
+        self.assertEqual(shown[:2], [
+            ("Contract action", "sign multisig operation"), self.UNLIMITED])
+        self.assertEqual([s[0] for s in self._first_pages()].count(
+            "UNLIMITED approval"), 1)
 
     def test_blind_inner_unlimited_approve_still_warns_in_715(self):
         self.requires_firmware_below("7.16.0")  # 7.16 refuses blind calls
@@ -761,6 +774,95 @@ class TestMsgEthereumErc7730Runtime(Erc7730Harness, common.KeepKeyTest):
                        "Invalid ERC-7730 embedded call")
         self.assertNotIn("UNLIMITED approval", [s[0] for s in self.screens])
         self.assertNotIn(types.ButtonRequest_SignTx, self.button_codes)
+
+    # 7.17: a definition for approve() or increaseAllowance() itself. The
+    # host sends only the selector; the first calldata pass reads both words
+    # and the top-level allowance policy runs on them before any screen.
+    INCREASE = "increaseAllowance(address spender,uint256 addedValue)"
+
+    def _allowance(self, signature, amount, spender=None):
+        """Program and arguments for `signature` granting OTHER_ADDRESS
+        `amount` of USDC."""
+        self.requires_firmware("7.17.0")
+        program = erc7730_compiler.compile_calldata(
+            {"display": {"formats": {signature: {
+                "intent": "Allow spending", "fields": [
+                    {"path": signature.split(",")[0].split(" ")[1],
+                     "label": "Spender", "format": "addressName"},
+                    {"path": signature.split(" ")[-1][:-1],
+                     "label": "Amount", "format": "raw"}]}}}},
+            signature, 1, self.USDC)
+        arguments = (spender or self._word(OTHER_ADDRESS)) + self._word(amount)
+        return program, arguments
+
+    def _allowance_start(self, data):
+        return eth.EthereumSignTx(
+            address_n=PATH, nonce=b"", gas_price=b"\x01",
+            gas_limit=b"\xff\xff", to=self.USDC, value=b"", chain_id=1,
+            data_length=68, data_initial_chunk=data)
+
+    def _allowance_signed(self, program, arguments):
+        """Certified approve: same signature as the ordinary path, which needs
+        all 68 bytes in its first chunk."""
+        baseline, _, _, _ = self._walk(
+            self._allowance_start(program[38:42] + arguments))
+        self.assertTrue(baseline.HasField("signature_r"))
+        envelope = self._preload(program)
+        result, _, passes, _ = self._walk(
+            self._allowance_start(program[38:42]), envelope,
+            arguments=arguments)
+        self.assertIsInstance(result, eth.EthereumTxRequest)
+        self.assertEqual((result.signature_r, result.signature_s),
+                         (baseline.signature_r, baseline.signature_s))
+        self.assertGreater(passes, 1)
+        return self._first_pages()
+
+
+    def test_certified_finite_approve_signs_after_its_review(self):
+        program, arguments = self._allowance(self.APPROVE, 42)
+        shown = self._allowance_signed(program, arguments)
+        self.assertNotIn("UNLIMITED approval", [s[0] for s in shown])
+        fields = [s for s in shown
+                  if s[0] in ("Contract action", "Signer field")]
+        self.assertEqual(fields, [
+            ("Contract action", "Allow spending"),
+            ("Signer field", "Spender:\n0x" + OTHER_ADDRESS.hex()),
+            ("Signer field", "Amount:\n42")])
+
+    def test_certified_unlimited_approve_warns_before_any_screen(self):
+        # 2^255 and up is UNLIMITED, for approve() and increaseAllowance().
+        for signature in (self.APPROVE, self.INCREASE):
+            for amount in (self.MAX, 1 << 255):
+                program, arguments = self._allowance(signature, amount)
+                shown = self._allowance_signed(program, arguments)
+                self.assertEqual((signature, amount, shown[0]),
+                                 (signature, amount, self.UNLIMITED))
+                self.assertEqual(
+                    [s[0] for s in shown].count("UNLIMITED approval"), 1)
+                self.assertIn(("Contract action", "Allow spending"), shown)
+
+    def test_declining_a_certified_unlimited_approve_signs_nothing(self):
+        program, arguments = self._allowance(self.APPROVE, self.MAX)
+        envelope = self._preload(program)
+        result, _, _, _ = self._walk(
+            self._allowance_start(program[38:42]), envelope,
+            arguments=arguments, cancel_title="UNLIMITED approval")
+        assert_failure(self, result, types.Failure_ActionCancelled,
+                       "Signing cancelled by user")
+        self.assertEqual([s[0] for s in self.screens], ["UNLIMITED approval"])
+
+    def test_certified_approve_with_a_dirty_spender_word_is_refused(self):
+        # Refused before any screen: the address word does not decode (and
+        # the allowance policy refuses a dirty spender word in any case).
+        program, arguments = self._allowance(
+            self.APPROVE, self.MAX, spender=b"\x01" + bytes(11) + OTHER_ADDRESS)
+        envelope = self._preload(program)
+        result, buttons, _, _ = self._walk(
+            self._allowance_start(program[38:42]), envelope,
+            arguments=arguments)
+        assert_failure(self, result, types.Failure_SyntaxError,
+                       "ERC-7730 calldata does not match definition")
+        self.assertEqual(buttons, 0)
 
     def test_inner_call_without_a_definition_is_blind_in_715(self):
         self.requires_firmware_below("7.16.0")  # 7.16 refuses instead

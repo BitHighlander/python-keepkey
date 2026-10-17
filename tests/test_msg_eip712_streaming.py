@@ -1223,5 +1223,29 @@ class TestMsgEip712Streaming(common.KeepKeyTest):
         self.assertEqual(self._parts(screens, 'data', 'bytes')[0],
                          '0x' + data)
 
+    def test_safe_data_approve_uses_the_top_level_threshold(self):
+        """7.17: approve(spender, 2^255) in SafeTx.data is UNLIMITED, as at
+        the top level (7.16 warned only at 2^256 - 1); 2^255 - 1 is not."""
+        self.requires_firmware("7.17.0")
+        spender = '68b3465833fb72a70ecdf485e0e4c7bd8665fc45'
+        for amount, warned in (('80' + '00' * 31, 1), ('7f' + 'ff' * 31, 0)):
+            data = '095ea7b3' + '00' * 12 + spender + amount
+            doc = {
+                "types": {
+                    "EIP712Domain": [{"name": "chainId", "type": "uint256"}],
+                    "SafeTx": [{"name": "to", "type": "address"},
+                               {"name": "data", "type": "bytes"}],
+                },
+                "primaryType": "SafeTx",
+                "domain": {"chainId": 1},
+                "message": {
+                    "to": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+                    "data": "0x" + data},
+            }
+            resp, screens = self._walk_text(doc)
+            self._assert_signed(doc, resp)
+            titles = [title for title, _ in screens]
+            self.assertEqual(titles.count('UNLIMITED approval'), warned)
+
 if __name__ == '__main__':
     unittest.main()
