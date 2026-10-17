@@ -21,8 +21,9 @@ import re
 from .signed_metadata import keccak256
 
 _SIGNATURE = re.compile(r'^([A-Za-z_$][A-Za-z0-9_$]*)\((.*)\)$')
-# Selectors hash canonical types, so the bare aliases are spelled out.
+# Selectors hash canonical types, including aliases nested in arrays/tuples.
 _ALIASES = {'uint': 'uint256', 'int': 'int256'}
+_INTEGER_ALIAS = re.compile(r'\b(?:uint|int)\b')
 
 
 def parse_signature(signature):
@@ -34,7 +35,8 @@ def parse_signature(signature):
     types = [t.strip() for t in rest.split(',')] if rest.strip() else []
     if any(not t for t in types):
         raise ValueError('empty parameter type in %r' % signature)
-    return name, [_ALIASES.get(t, t) for t in types]
+    return name, [_INTEGER_ALIAS.sub(lambda m: _ALIASES[m.group(0)], t)
+                  for t in types]
 
 
 def canonical_signature(signature):
@@ -84,6 +86,14 @@ def _int_bits(digits, typ):
     return bits
 
 
+def _exact_integer(value):
+    """Accept decimal strings and numeric values only without truncation."""
+    n = int(value)
+    if not isinstance(value, str) and n != value:
+        raise ValueError('integer argument would lose precision: %r' % value)
+    return n
+
+
 def encode_static_args(types, values):
     """ABI-encode STATIC Solidity types into concatenated 32-byte words.
     Raises on any dynamic type (string/bytes/arrays) — build those by hand."""
@@ -102,7 +112,7 @@ def encode_static_args(types, values):
             out += _addr_word(val)
         elif typ.startswith('uint'):
             bits = _int_bits(typ[4:], typ)
-            n = int(val)
+            n = _exact_integer(val)
             if not 0 <= n < (1 << bits):
                 raise ValueError('value %r out of range for %s' % (val, typ))
             out += n.to_bytes(32, 'big')
@@ -114,7 +124,7 @@ def encode_static_args(types, values):
             # 2^(N-1), which the EVM reads back as NEGATIVE -- calldata that
             # does not mean what the declared type says.
             bits = _int_bits(typ[3:], typ)
-            n = int(val)
+            n = _exact_integer(val)
             lo, hi = -(1 << (bits - 1)), (1 << (bits - 1)) - 1
             if not lo <= n <= hi:
                 raise ValueError(

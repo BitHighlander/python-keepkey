@@ -2,8 +2,33 @@ import os
 import subprocess
 import sys
 import unittest
+from decimal import Decimal
+from fractions import Fraction
 
-from keepkeylib.clearsign_abi import encode_static_args
+import pytest
+
+from keepkeylib.clearsign_abi import canonical_signature, encode_static_args, selector
+
+
+@pytest.mark.parametrize('typ', ['uint8', 'int8'])
+@pytest.mark.parametrize('value', [1.9, -0.9, -1.9, Decimal('1.9'),
+                                  Decimal('-0.9'), Fraction(19, 10),
+                                  Fraction(-9, 10)])
+def test_integer_arguments_reject_fractional_values(typ, value):
+    with pytest.raises(ValueError):
+        encode_static_args([typ], [value])
+
+
+@pytest.mark.parametrize('typ,value,expected', [
+    ('uint8', '255', 255), ('int8', '-128', -128),
+    ('uint8', 1.0, 1), ('int8', -1.0, -1),
+    ('uint256', str(2**256 - 1), 2**256 - 1),
+    ('int256', str(-(2**255)), -(2**255)),
+    ('uint8', Decimal('2'), 2), ('int8', Fraction(-2, 1), -2),
+])
+def test_integer_arguments_preserve_exact_values(typ, value, expected):
+    assert encode_static_args([typ], [value]) == expected.to_bytes(
+        32, 'big', signed=typ.startswith('int'))
 
 
 class TestClearsignAbiSignedIntegers(unittest.TestCase):
@@ -36,13 +61,15 @@ class TestClearsignAbiSignedIntegers(unittest.TestCase):
     def test_validation_survives_optimized_python(self):
         """Interpreter optimization must not remove calldata validation."""
         script = r'''
-from keepkeylib.clearsign_abi import encode_static_args
+from keepkeylib.clearsign_abi import canonical_signature, encode_static_args, selector
 
 invalid = (
     (['address'], [b'\x11' * 19]),
     (['uint8'], []),
     (['uint8'], [256]),
     (['int8'], [128]),
+    (['uint8'], [-0.9]),
+    (['int8'], [-1.9]),
     (['bytes2'], [b'\x11']),
 )
 for types, values in invalid:
@@ -106,6 +133,23 @@ class TestClearsignAbiTypeValidation(unittest.TestCase):
         for typ in ('uint256[]', 'address[]', 'uint256[2]'):
             with self.assertRaisesRegex(ValueError, 'dynamic/unsupported type'):
                 encode_static_args([typ], [[1]])
+
+
+class TestClearsignAbiSelectors(unittest.TestCase):
+    def test_integer_aliases_inside_composite_types(self):
+        for shorthand, canonical in (
+            ('f(uint[])', 'f(uint256[])'),
+            ('f(int[2][][4])', 'f(int256[2][][4])'),
+            ('f((uint,int[]),uint[3])', 'f((uint256,int256[]),uint256[3])'),
+            ('f((address,(uint,int)[])[])', 'f((address,(uint256,int256)[])[])'),
+        ):
+            with self.subTest(signature=shorthand):
+                self.assertEqual(canonical_signature(shorthand), canonical)
+                self.assertEqual(selector(shorthand), selector(canonical))
+
+    def test_aliases_do_not_rewrite_function_names_or_other_identifiers(self):
+        for signature in ('uint(uint8,int32)', 'f(myuint,my_int,uint256)'):
+            self.assertEqual(canonical_signature(signature), signature)
 
 
 if __name__ == '__main__':

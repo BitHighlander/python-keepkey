@@ -13,6 +13,7 @@ import time
 import unittest
 
 import common
+from confirmation_pages import ConfirmationPages
 import oled_text
 from keepkeylib import eip712_stream as es
 from keepkeylib import messages_ethereum_pb2 as eth
@@ -703,36 +704,20 @@ class TestMsgEip712Streaming(common.KeepKeyTest):
         self.requires_firmware("7.16.0")
         self.requires_message("EthereumTxMetadata")
         self.requires_release_capability("permit2-review")
-        self.client.ethereum_send_tx_metadata(
+        resp = self.client.ethereum_send_tx_metadata(
             signed_payload=self.UR_V2_NAME, metadata_version=3, key_id=0x80)
-        # An unlimited EIP-2612 permit whose domain names no token
-        # (no verifyingContract): ambiguous, so the device still refuses it.
-        refused = {
-            "types": {
-                "EIP712Domain": [
-                    {"name": "name", "type": "string"},
-                    {"name": "chainId", "type": "uint256"},
-                ],
-                "Permit": [
-                    {"name": "owner", "type": "address"},
-                    {"name": "spender", "type": "address"},
-                    {"name": "value", "type": "uint256"},
-                    {"name": "nonce", "type": "uint256"},
-                    {"name": "deadline", "type": "uint256"},
-                ],
-            },
-            "primaryType": "Permit",
-            "domain": {"name": "USD Coin", "chainId": 1},
-            "message": {
-                "owner": "0x73d0385F4d8E00C5e6504C6030F47BF6212736A8",
-                "spender": "0x66a9893cC07D91D95644AEDD05D03f95e1dBA8Af",
-                "value": str((1 << 256) - 1), "nonce": "0",
-                "deadline": "1893456000"},
-        }
-        failure = self._walk(refused)
+        self.assertEqual(resp.classification, 1)  # VERIFIED
+        # An EIP-2612 permit to the same spender, declined at the final sign
+        # screen. (This used an ambiguous unlimited permit, but those now sign
+        # behind an UNLIMITED warning: owner rule 2026-10-07, ledger D10.)
+        declined = copy.deepcopy(self.USDC_PERMIT)
+        declined["message"]["spender"] = (
+            "0x66a9893cC07D91D95644AEDD05D03f95e1dBA8Af")
+        failure = self._walk(declined, decline_final=True)
         self.assertIsInstance(failure, proto.Failure)
-        self.assertEqual(failure.message,
-                         'Unlimited ERC20 approval is disabled')
+        self.assertEqual((failure.code, failure.message),
+                         (types.Failure_ActionCancelled,
+                          'Signing cancelled by user'))
         doc = self.UNISWAP_PERMIT2
         self._assert_reference_signature(doc, self._walk(doc))
         self.assertTrue(oled_text.shows(
@@ -963,13 +948,14 @@ class TestMsgEip712Streaming(common.KeepKeyTest):
         self.assertIsInstance(resp, proto.Failure)
         self.assertEqual(resp.code, types.Failure_ActionCancelled)
 
-    def test_ambiguous_unlimited_permits_are_refused_before_the_amount_screen(
+    def test_ambiguous_unlimited_permits_sign_with_unlimited_on_the_value_screen(
             self):
-        """An unlimited permit the device cannot attribute is refused before
-        that leaf is ever displayed: a Permit whose type hash is not
-        EIP-2612's or DAI's, an EIP-2612 permit whose domain names no token,
-        and an unlimited Permit2-shaped amount outside canonical
-        PermitSingle."""
+        """An unlimited permit the device cannot attribute -- a Permit whose
+        type hash is not EIP-2612's or DAI's, an EIP-2612 permit whose domain
+        names no token, an unlimited Permit2-shaped amount outside canonical
+        PermitSingle -- is signed, never refused (owner rule 2026-10-07): its
+        value screen is titled UNLIMITED APPROVAL. With no token to name, no
+        "UNLIMITED allowance" warning follows."""
         self.requires_firmware("7.16.0")
         self.requires_release_capability("erc20-unlimited-permit-review")
         no_nonce = copy.deepcopy(self.USDC_PERMIT)  # another type hash
@@ -1034,12 +1020,14 @@ class TestMsgEip712Streaming(common.KeepKeyTest):
             for key in path[:-1]:
                 target = target[key]
             target[path[-1]] = unlimited_value
-            resp = self._walk(unlimited)
-            self.assertIsInstance(resp, proto.Failure, leaf)
-            self.assertEqual((resp.code, resp.message),
-                             (types.Failure_SyntaxError,
-                              'Unlimited ERC20 approval is disabled'))
-            self.assertEqual(len(self.frames), before_leaf)
+            self._assert_reference_signature(unlimited,
+                                             self._walk(unlimited))
+            titled = [i for i, (_, layout) in enumerate(self.frames)
+                      if oled_text.find_line(layout, 'UNLIMITED APPROVAL',
+                                             oled_text.TITLE_FONT) is not None]
+            with self.subTest(leaf):
+                self.assertEqual(titled, [before_leaf])
+                self.assertEqual(self._warnings(), [])
 
     def test_1024_byte_dynamic_bytes_leaf_signs(self):
         """A 1024-byte `bytes` leaf is reviewed in parts and signs; the digest
@@ -1069,13 +1057,13 @@ class TestMsgEip712Streaming(common.KeepKeyTest):
         msg = eth.EthereumSignTypedData(address_n=PATH,
                                         primary_type=doc['primaryType'],
                                         metamask_v4_compat=True)
-        screens = []
+        pages = ConfirmationPages()
+        screens = pages.texts
         resp = self.client.call_raw(msg)
         for _ in range(max_steps):
             if isinstance(resp, proto.ButtonRequest):
                 text = self.client.debug.read_confirm_text()
-                if not screens or screens[-1] != text:
-                    screens.append(text)
+                pages.add(resp.code, text)
                 if decline and text[1].startswith(decline):
                     self.client.debug.press_no()
                 else:
@@ -1090,6 +1078,8 @@ class TestMsgEip712Streaming(common.KeepKeyTest):
                     tamper(ack)
                 resp = self.client.call_raw(ack)
             else:
+                if not isinstance(resp, proto.Failure):
+                    pages.finish()
                 return resp, screens
         raise AssertionError('walk did not terminate')
 
