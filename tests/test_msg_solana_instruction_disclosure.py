@@ -14,8 +14,10 @@ import common
 import pytest
 
 from keepkeylib import messages_solana_pb2 as solana
+from Crypto.Signature import eddsa
 from keepkeylib.client import CallException
-from keepkeylib.tools import parse_path
+from keepkeylib.tools import b58encode, parse_path
+from oled_text import find_line, find_text
 from test_msg_display_disclosure import ScreenRecorder
 
 
@@ -122,6 +124,94 @@ class TestSolanaInstructionDisclosure(common.KeepKeyTest):
             raw_tx = build_tx(keys, 1, [(4, [0, 1, 2, 0, 3], data)])
             with pytest.raises(CallException):
                 self.client.call(self._request(raw_tx))
+
+    def test_token_2022_fee_transfer_with_extra_accounts_is_opaque(self):
+        self.requires_firmware("7.17.0")
+        data = (bytes([26, 1]) + struct.pack("<Q", 1000000) + bytes([6]) +
+                struct.pack("<Q", 100))
+        keys = [self.signer, b"\x21" * 32, b"\x32" * 32, b"\x43" * 32,
+                TOKEN_2022_PROGRAM]
+        raw_tx = build_tx(keys, 1, [(4, [0, 1, 2, 0, 3], data)])
+        with pytest.raises(CallException):
+            self.client.call(self._request(raw_tx))
+
+    def _token_2022_transfer(self, source, mint, destination, data,
+                             program=TOKEN_2022_PROGRAM):
+        keys = [self.signer, source, mint, destination, program]
+        return build_tx(keys, 1, [(4, [1, 2, 3, 0], data)])
+
+    def _sign_and_record(self, raw_tx, group):
+        recorder = ScreenRecorder(
+            self.client, answer=True, screenshot_group=group
+        )
+        with recorder:
+            response = self.client.call(self._request(raw_tx))
+        # build_tx() leads with the 0 signature count; the message follows.
+        eddsa.new(eddsa.import_public_key(self.signer), "rfc8032").verify(
+            raw_tx[1:], bytes(response.signature))
+        return recorder.screens
+
+    def test_token_2022_transfer_checked_clear_signs(self):
+        """Exactly [source, mint, destination, authority] clear-signs with
+        AdvancedMode off: the program is named on the source screen, then the
+        mint, then the amount scaled by the signed decimals."""
+        self.requires_firmware("7.17.0")
+        source, mint, destination = b"\x25" * 32, b"\x36" * 32, b"\x47" * 32
+        data = bytes([12]) + struct.pack("<Q", 1500000) + bytes([6])
+        screens = self._sign_and_record(
+            self._token_2022_transfer(source, mint, destination, data),
+            "token-2022-transfer")
+        source_at = find_text(
+            screens,
+            "Transfer from Token-2022 account\n" + b58encode(source))
+        self.assertIsNotNone(source_at)
+        mint_at = find_text(screens, "Token mint\n" + b58encode(mint))
+        self.assertIsNotNone(mint_at)
+        self.assertGreater(mint_at, source_at)
+        self.assertFalse(any(find_line(screen, "Transfer fee") for screen in screens))
+
+    def test_token_2022_transfer_checked_with_fee_shows_fee(self):
+        """TransferCheckedWithFee (26, 1) clear-signs and shows the signed fee,
+        scaled by the signed decimals, before the amount."""
+        self.requires_firmware("7.17.0")
+        source, mint, destination = b"\x25" * 32, b"\x36" * 32, b"\x47" * 32
+        data = (bytes([26, 1]) + struct.pack("<Q", 1500000) + bytes([6]) +
+                struct.pack("<Q", 2500))
+        screens = self._sign_and_record(
+            self._token_2022_transfer(source, mint, destination, data),
+            "token-2022-transfer-fee")
+        self.assertIsNotNone(find_text(
+            screens, "Transfer fee 0.0025 tokens\ndeducted from amount sent"))
+        self.assertIsNotNone(find_text(screens, "Token mint\n" + b58encode(mint)))
+
+    def test_token_2022_transfer_fields_change_oled_review(self):
+        """Each signed field of the Token-2022 transfer, and the program
+        itself, changes the screens."""
+        self.requires_firmware("7.17.0")
+        key = lambda value: bytes([value]) * 32
+        checked = lambda amount, decimals: (
+            bytes([12]) + struct.pack("<Q", amount) + bytes([decimals]))
+        with_fee = lambda fee: (
+            bytes([26, 1]) + struct.pack("<Q", 1000000) + bytes([6]) +
+            struct.pack("<Q", fee))
+        t = self._token_2022_transfer
+        base = t(key(1), key(2), key(3), checked(1000000, 6))
+        cases = [
+            ("t22-source", base, t(key(4), key(2), key(3), checked(1000000, 6))),
+            ("t22-mint", base, t(key(1), key(5), key(3), checked(1000000, 6))),
+            ("t22-destination", base,
+             t(key(1), key(2), key(6), checked(1000000, 6))),
+            ("t22-amount", base, t(key(1), key(2), key(3), checked(1000001, 6))),
+            ("t22-decimals", base,
+             t(key(1), key(2), key(3), checked(1000000, 7))),
+            ("t22-program", base,
+             t(key(1), key(2), key(3), checked(1000000, 6), TOKEN_PROGRAM)),
+            ("t22-fee-form", base, t(key(1), key(2), key(3), with_fee(0))),
+            ("t22-fee", t(key(1), key(2), key(3), with_fee(1)),
+             t(key(1), key(2), key(3), with_fee(2))),
+        ]
+        for label, raw_a, raw_b in cases:
+            self._assert_pair(label, raw_a, raw_b)
 
     def test_mint_and_burn_require_opaque_mode(self):
         mint = b"\x21" * 32
