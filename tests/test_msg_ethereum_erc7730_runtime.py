@@ -1376,6 +1376,96 @@ class TestMsgEthereumErc7730Runtime(Erc7730Harness, common.KeepKeyTest):
         _, arguments, outer_def, _ = self._exec_setup()
         self._exec_refused(arguments, erc7730.Catalog((outer_def,)))
 
+    # 7.17: a Safe exec whose operation is not 0 (CALL) delegatecalls its
+    # inner call: the callee's code runs as the Safe, so the callee's own
+    # definition does not describe it. The device reads the operation from
+    # the signed calldata, says so and refuses; it never fetches or shows the
+    # inner definition.
+    SAFE_EXEC = ("execTransaction(address to,uint256 value,bytes data,"
+                 "uint8 operation,uint256 safeTxGas,uint256 baseGas,"
+                 "uint256 gasPrice,address gasToken,address refundReceiver,"
+                 "bytes signatures)")
+    SAFE_MODULE_EXEC = ("execTransactionFromModule(address to,uint256 value,"
+                        "bytes data,uint8 operation)")
+    DELEGATECALL = ("DELEGATECALL",
+                    "Runs 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48 as the "
+                    "Safe, with its full authority. Not clear-signed.")
+
+    def _safe_exec(self, signature, operation):
+        """A real Safe exec of USDC transfer(OTHER_ADDRESS, 1.5 USDC): its
+        arguments and the outer and inner definitions."""
+        inner_def = self._exec_setup()[3]  # also loads the signer
+        outer = erc7730_compiler.compile_calldata(
+            {"display": {"formats": {signature: {
+                "intent": "sign multisig operation", "fields": [
+                    {"path": "data", "label": "Transaction",
+                     "format": "calldata",
+                     "params": {"calleePath": "to", "amountPath": "value",
+                                "spenderPath": "@.to"}},
+                    {"path": "operation", "label": "Operation",
+                     "format": "raw"}]}}}},
+            signature, 1, ADDRESS)
+        outer_def = self._definition(outer, self._envelope(outer))
+        self._exec_outer = (outer, outer_def)
+        call = (bytes.fromhex("a9059cbb") + self._word(OTHER_ADDRESS) +
+                self._word(1500000))
+        tail = self._word(len(call)) + call + bytes(-len(call) % 32)
+        if signature == self.SAFE_MODULE_EXEC:
+            head = (self._word(self.USDC) + self._word(0) + self._word(128) +
+                    self._word(operation))
+            return head + tail, outer_def, inner_def
+        signatures = bytes(65)
+        head = (self._word(self.USDC) + self._word(0) + self._word(320) +
+                self._word(operation) + self._word(150000) + self._word(0) +
+                self._word(0) + self._word(bytes(20)) + self._word(bytes(20)) +
+                self._word(320 + len(tail)))
+        return (head + tail + self._word(len(signatures)) + signatures +
+                bytes(-len(signatures) % 32)), outer_def, inner_def
+
+    def test_safe_delegatecall_is_named_and_refused(self):
+        self.requires_firmware("7.17.0")
+        for signature in (self.SAFE_EXEC, self.SAFE_MODULE_EXEC):
+            for operation in (1, 2):
+                arguments, outer_def, inner_def = self._safe_exec(
+                    signature, operation)
+                depths = []
+
+                class Recording(erc7730.Catalog):
+                    def chunk(self, request):
+                        depths.append(request.recursion_depth)
+                        return erc7730.Catalog.chunk(self, request)
+                outer = self._exec_outer[0]
+
+                def preload():
+                    erc7730.preload(self.client, outer_def)
+                    self._drop_setup_screenshots()
+                    return b""
+                self._refused(outer, arguments,
+                              "DELEGATECALL cannot be clear-signed",
+                              preload=preload,
+                              catalog=Recording((outer_def, inner_def)))
+                titles = [s[0] for s in self.screens]
+                self.assertEqual(self._first_pages()[-1], self.DELEGATECALL)
+                self.assertNotIn("Inner action", titles)
+                self.assertNotIn("Inner signer", titles)
+                self.assertNotIn("Inner field", titles)
+                self.assertEqual(max(depths), 0)
+
+    def test_safe_call_is_still_clear_signed(self):
+        self.requires_firmware("7.17.0")
+        for signature in (self.SAFE_EXEC, self.SAFE_MODULE_EXEC):
+            arguments, outer_def, inner_def = self._safe_exec(signature, 0)
+            self._exec_certified(arguments,
+                                 erc7730.Catalog((outer_def, inner_def)))
+            shown = [s for s in self._relevant()
+                     if s[0] not in ("Runtime signer", "Inner signer")]
+            self.assertEqual([s[0] for s in shown], [
+                "Contract action", "Signer field", "Inner action",
+                "Inner field", "Inner field", "Signer field"])
+            self.assertEqual(shown[2], ("Inner action", "Transfer"))
+            self.assertEqual(shown[-1], ("Signer field", "Operation:\n0"))
+            self.assertNotIn("DELEGATECALL", [s[0] for s in self.screens])
+
     def test_a_raw_value_too_long_to_capture_is_refused_from_716(self):
         self.requires_firmware("7.16.0")
         signature = "blob(bytes data)"
