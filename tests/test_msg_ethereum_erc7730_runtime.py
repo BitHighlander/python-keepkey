@@ -1225,6 +1225,55 @@ class TestMsgEthereumErc7730Runtime(Erc7730Harness, common.KeepKeyTest):
                 ("Signer field", "Token:\n0xA0b86991c6218b36c1d19D4a2e9Eb0cE"
                                  "3606eB48")])
 
+    # 7.17: a definition may allow bytes after the ABI-encoded arguments, as
+    # referral and integrator tags (1inch, Morpho vaults) append. The review
+    # says they exist; a definition that does not allow them is refused.
+    DEPOSIT = "deposit(uint256 assets,address receiver)"
+
+    def _deposit(self, trailing_data):
+        return erc7730_compiler.compile_calldata(
+            {"display": {"formats": {self.DEPOSIT: {
+                "intent": "Deposit", "fields": [
+                    {"path": "assets", "label": "Assets", "format": "raw"},
+                    {"path": "receiver", "label": "Receiver",
+                     "format": "addressName"}]}}}},
+            self.DEPOSIT, 1, ADDRESS, trailing_data=trailing_data)
+
+    def test_allowed_trailing_bytes_are_said_to_exist(self):
+        self.requires_firmware("7.17.0")
+        arguments = self._word(42) + self._word(OTHER_ADDRESS)
+        for tag in (bytes.fromhex("0bad1dea"), bytes(range(40))):
+            self._certified(self._deposit(True), arguments + tag)
+            shown = [s for s in self._first_pages()
+                     if s[0] in ("Signer field", "Extra data")]
+            self.assertEqual(shown, [
+                ("Signer field", "Assets:\n42"),
+                ("Signer field", "Receiver:\n0x" + OTHER_ADDRESS.hex()),
+                ("Extra data", "%d more bytes follow the arguments. The "
+                 "description above does not cover them." % len(tag))])
+        # Without a tag there is nothing to say.
+        self._certified(self._deposit(True), arguments)
+        self.assertNotIn("Extra data", [s[0] for s in self.screens])
+
+    def test_trailing_bytes_are_refused_unless_the_definition_allows(self):
+        self.requires_firmware("7.17.0")
+        program = self._deposit(False)
+        arguments = (self._word(42) + self._word(OTHER_ADDRESS) +
+                     bytes.fromhex("0bad1dea"))
+        envelope = self._preload(program)
+        result, buttons, _, _ = self._walk(
+            self._audit_start(program, 4 + len(arguments)), envelope,
+            arguments=arguments)
+        assert_failure(self, result, types.Failure_SyntaxError,
+                       "Invalid ERC-7730 execution program")
+        self.assertEqual(buttons, 0)
+
+    def test_declining_the_extra_data_screen_signs_nothing(self):
+        self.requires_firmware("7.17.0")
+        self._declined(self._deposit(True),
+                       self._word(42) + self._word(OTHER_ADDRESS) + b"\x01",
+                       "Extra data")
+
     def test_multiline_values_split_between_lines(self):
         # A label of 64 non-ASCII bytes escapes to 256 characters, leaving 93
         # per confirmation: the unknown-token body splits into numbered

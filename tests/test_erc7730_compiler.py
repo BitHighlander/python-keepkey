@@ -594,6 +594,29 @@ def test_typed_data_reads_only_its_to_container():
         _firmware_validate(program, refusal)
 
 
+def test_trailing_data_flag_is_header_byte_6_for_calldata_only():
+    signature = "deposit(uint256 assets)"
+    descriptor = {"display": {"formats": {signature: {
+        "intent": "Deposit", "fields": [
+            {"path": "assets", "label": "Assets", "format": "raw"}]}}}}
+    address = "0x" + "11" * 20
+    plain = compile_calldata(descriptor, signature, 1, address)
+    tagged = compile_calldata(descriptor, signature, 1, address,
+                              trailing_data=True)
+    assert plain[6] == 0 and tagged[6] == 1
+    assert plain[:6] + plain[7:] == tagged[:6] + tagged[7:]
+    _firmware_validate(tagged)
+    typed = {
+        "types": {"EIP712Domain": [{"name": "chainId", "type": "uint256"}],
+                  "Mail": [{"name": "a", "type": "uint256"}]},
+        "primaryType": "Mail", "domain": {"chainId": 1},
+        "message": {"a": 1}}
+    with pytest.raises(ValueError, match="trailing data"):
+        compile_eip712({"display": {"formats": {"Mail(uint256 a)": {
+            "intent": "Mail", "fields": []}}}}, typed, address=address,
+            trailing_data=True)
+
+
 def test_mirror_applies_the_devices_abi_and_text_limits():
     # Each shape the device refuses at preload is refused by the mirror too,
     # and a neighbour inside the limit is accepted by both.
