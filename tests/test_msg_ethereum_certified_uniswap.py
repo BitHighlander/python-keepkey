@@ -179,11 +179,10 @@ class TestEthereumCertifiedUniswap(common.KeepKeyTest):
     def test_unlimited_approve_to_permit2_names_uniswap_and_the_limit(self):
         data = (bytes.fromhex("095ea7b3") + b"\0" * 12 + PERMIT2 + b"\xff" * 32)
         screens = self._sign(USDC, data, APPROVE_ENVELOPE)
-        # The device's own UNLIMITED warning comes first, on every firmware
-        # that signs unlimited approvals, whatever the certified review says.
+        # The certified review states the UNLIMITED allowance itself, so the
+        # device's separate warning waits for it and is not shown (SRS-7.16
+        # R-7.4; firmware ethereum.c unlimited_deferred).
         self.assertScreens(screens, [
-            ("UNLIMITED APPROVAL", None),
-            ("UNLIMITED APPROVAL", None),
             ("UNISWAP", "Let the Uniswap approval contract spend up to UNLIMITED "
                         "USDC for trades you sign"),
             ("LIMITS", "Can spend up to\nUNLIMITED USDC"),
