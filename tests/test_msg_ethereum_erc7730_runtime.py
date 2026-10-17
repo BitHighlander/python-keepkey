@@ -1171,6 +1171,60 @@ class TestMsgEthereumErc7730Runtime(Erc7730Harness, common.KeepKeyTest):
         self.assertIn(("Signer field", "Data:\nShown above in full: 200 bytes"),
                       self._first_pages())
 
+    PERMIT = ("Permit(address owner,address spender,uint256 value,"
+              "uint256 nonce,uint256 deadline)")
+
+    def test_typed_data_to_is_the_verifying_contract(self):
+        # 7.17: in typed data @.to is the domain's verifyingContract, the
+        # deployment the definition is bound to, so an ERC-2612 permit names
+        # its token by the contract it is signed for.
+        self.requires_firmware("7.17.0")
+        doc = {
+            "types": {
+                "EIP712Domain": [
+                    {"name": "name", "type": "string"},
+                    {"name": "version", "type": "string"},
+                    {"name": "chainId", "type": "uint256"},
+                    {"name": "verifyingContract", "type": "address"}],
+                "Permit": [
+                    {"name": "owner", "type": "address"},
+                    {"name": "spender", "type": "address"},
+                    {"name": "value", "type": "uint256"},
+                    {"name": "nonce", "type": "uint256"},
+                    {"name": "deadline", "type": "uint256"}]},
+            "primaryType": "Permit",
+            "domain": {"name": "USD Coin", "version": "2", "chainId": 1,
+                       "verifyingContract": "0x" + self.USDC.hex()},
+            "message": {"owner": "0x" + ADDRESS.hex(),
+                        "spender": "0x" + OTHER_ADDRESS.hex(),
+                        "value": 1500000, "nonce": 0,
+                        "deadline": 1900000000}}
+        program = erc7730_compiler.compile_eip712(
+            {"display": {"formats": {self.PERMIT: {
+                "intent": "Authorize spending", "fields": [
+                    {"path": "spender", "label": "Spender",
+                     "format": "addressName"},
+                    {"path": "value", "label": "Amount",
+                     "format": "tokenAmount",
+                     "params": {"tokenPath": "@.to"}},
+                    {"path": "@.to", "label": "Token",
+                     "format": "addressName"}]}}}},
+            doc)
+        start = eth.EthereumSignTypedData(
+            address_n=PATH, primary_type="Permit", metamask_v4_compat=True)
+        baseline, _, _, _ = self._walk(start, doc=doc)
+        self.assertIsInstance(baseline, eth.EthereumTypedDataSignature)
+        envelope = self._preload(program)
+        result, _, _, _ = self._walk(start, envelope, doc)
+        self.assertIsInstance(result, eth.EthereumTypedDataSignature)
+        self.assertEqual(result.signature, baseline.signature)
+        self.assertEqual(
+            [s for s in self._first_pages() if s[0] == "Signer field"], [
+                ("Signer field", "Spender:\n0x" + OTHER_ADDRESS.hex()),
+                ("Signer field", "Amount:\n1.5 USDC"),
+                ("Signer field", "Token:\n0xA0b86991c6218b36c1d19D4a2e9Eb0cE"
+                                 "3606eB48")])
+
     def test_multiline_values_split_between_lines(self):
         # A label of 64 non-ASCII bytes escapes to 256 characters, leaving 93
         # per confirmation: the unknown-token body splits into numbered

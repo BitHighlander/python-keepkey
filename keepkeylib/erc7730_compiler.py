@@ -1005,8 +1005,10 @@ DEVICE_CAPABILITIES = {
              frozenset((1, 15))),
     },
     "path_sources": frozenset((1, 2, 3)),
-    # @.from, @.to and @.value, calldata definitions only
+    # @.from, @.to and @.value for calldata definitions
     "containers": frozenset((1, 2, 3)),
+    # @.to for typed data: the domain's verifyingContract
+    "typed_containers": frozenset((2,)),
     # 2: every element, bound to the iteration's current element
     "path_step_opcodes": frozenset((1, 2)),
     # only "optional" (3), which is always shown
@@ -1195,8 +1197,8 @@ def device_refusal(program, capabilities=DEVICE_CAPABILITIES):
         at += 4
         if source not in capabilities["path_sources"]:
             return "path source %d is not executed" % source
-        if source == 2 and (index not in capabilities["containers"] or
-                            not calldata):
+        if source == 2 and index not in capabilities.get(
+                "containers" if calldata else "typed_containers", ()):
             return "container %d is not executed" % index
         if source == 3 and index >= 64:
             return "path names a literal beyond the table"

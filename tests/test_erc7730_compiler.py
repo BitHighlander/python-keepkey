@@ -568,6 +568,32 @@ def test_compiles_official_uniswap_eip712_fixture_through_firmware():
     _firmware_validate(compiled)
 
 
+def test_typed_data_reads_only_its_to_container():
+    # @.to in typed data is the domain's verifyingContract; @.from and
+    # @.value have no typed-data meaning the device reads.
+    typed = {
+        "types": {
+            "EIP712Domain": [{"name": "chainId", "type": "uint256"},
+                             {"name": "verifyingContract", "type": "address"}],
+            "Permit": [{"name": "spender", "type": "address"},
+                       {"name": "value", "type": "uint256"}]},
+        "primaryType": "Permit",
+        "domain": {"chainId": 1, "verifyingContract": "0x" + "11" * 20},
+        "message": {"spender": "0x" + "22" * 20, "value": 1}}
+    for container, refusal in (("@.to", None),
+                               ("@.from", "container 1 is not executed")):
+        descriptor = {"display": {"formats": {
+            "Permit(address spender,uint256 value)": {
+                "intent": "Permit", "fields": [
+                    {"path": "value", "label": "Amount",
+                     "format": "tokenAmount",
+                     "params": {"tokenPath": "@.to"}},
+                    {"path": container, "label": "Who",
+                     "format": "addressName"}]}}}}
+        program = _unchecked(compile_eip712, descriptor, typed)
+        _firmware_validate(program, refusal)
+
+
 def test_mirror_applies_the_devices_abi_and_text_limits():
     # Each shape the device refuses at preload is refused by the mirror too,
     # and a neighbour inside the limit is accepted by both.
