@@ -584,8 +584,8 @@ class TestSolanaSchemaCertified(SchemaReview):
 
     def test_certified_lookup_proof_when_sent_is_still_checked(self):
         """A lookup proof is optional, but one that is sent must verify: a
-        bad one is refused, not ignored in favour of the proof-less rule.
-        A proof for a message with no lookup table is refused too."""
+        bad one is refused, not ignored in favour of the proof-less rule,
+        with or without a lookup table in the message."""
         self.requires_firmware("7.17.0")
         for raw in (with_lookup(soltoshi_join(self.signer),
                                 [(self.JOIN_IX, self.JOIN_HIDDEN_SLOT)]),
