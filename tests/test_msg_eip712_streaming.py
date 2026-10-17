@@ -9,6 +9,7 @@
 # misreading.
 
 import copy
+import struct
 import time
 import unittest
 
@@ -18,6 +19,7 @@ import oled_text
 from keepkeylib import eip712_stream as es
 from keepkeylib import messages_ethereum_pb2 as eth
 from keepkeylib import messages_pb2 as proto
+from keepkeylib import signed_metadata
 from keepkeylib import types_pb2 as types
 from keepkeylib.client import CallException
 
@@ -697,6 +699,40 @@ class TestMsgEip712Streaming(common.KeepKeyTest):
         self.assertTrue(oled_text.shows(
             self._screens()[5], "Not identified\n"
                                 "0x66a9893cC07D91D95644AEDD05D03f95e1dBA8Af"))
+
+    def test_permit2_runtime_signer_name_is_refused(self):
+        """A name record is KeepKey-certified or nothing. The same body as
+        UR_V2_NAME's, signed by a runtime-loaded provider, is answered
+        Invalid: 7.16 acknowledged it as Verified and then never showed it.
+        The spender stays "Not identified"."""
+        self.requires_firmware("7.17.0")
+        self.requires_message("LoadClearsignSigner")
+        self.requires_release_capability("permit2-review")
+        signed_metadata.assert_test_key_matches_slot3()
+        # apply_policy re-Initializes, which drops RAM-only signers: first.
+        self.client.apply_policy('AdvancedMode', 1)
+        self.client.load_clearsign_signer(
+            key_id=3, pubkey=signed_metadata.test_signer_compressed_pubkey(),
+            alias="CI Test")
+        name = b"Uniswap Universal Router"
+        body = (bytes([0x06]) + struct.pack(">I", 1) +
+                bytes.fromhex("66a9893cc07d91d95644aedd05d03f95e1dba8af") +
+                bytes([len(name)]) + name + bytes([1]) + b"\0" * 4 +
+                bytes([3]))
+        # Byte-for-byte the certified body, but for its key id.
+        self.assertEqual(body[:-1], self.UR_V2_NAME[140:140 + len(body) - 1])
+        resp = self.client.ethereum_send_tx_metadata(
+            signed_payload=signed_metadata.sign_metadata(body),
+            metadata_version=1, key_id=3)
+        self.assertEqual((resp.classification, resp.display_summary),
+                         (2, "Invalid"))  # MALFORMED
+        doc = self.UNISWAP_PERMIT2
+        self._assert_reference_signature(doc, self._walk(doc))
+        self.assertTrue(oled_text.shows(
+            self._screens()[5], "Not identified\n"
+                                "0x66a9893cC07D91D95644AEDD05D03f95e1dBA8Af"))
+        self.assertIsNone(oled_text.find_text(
+            [layout for _, layout in self.frames], "Uniswap Universal Router"))
 
     def test_permit2_name_never_outlives_a_failed_request(self):
         """A record sent ahead of a request that FAILS is gone with it: the
