@@ -300,6 +300,10 @@ class TestSolanaSchemaCertified(SchemaReview):
             "relay")
         self.assertEqual(len(base.signature), 64)
         self.assertNotShown(base_screens, send)
+        # The runtime Identity screen ("... NOT verified by KeepKey.") is
+        # never part of a certified review.
+        self.assertFalse([s for s in base_screens
+                          if find_line(s, "IDENTITY", TITLE_FONT)])
 
         response, screens = self._review(
             self._certified(relay_message(self.signer,
