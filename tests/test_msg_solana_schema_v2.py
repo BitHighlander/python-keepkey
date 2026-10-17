@@ -338,12 +338,9 @@ class TestSolanaSchemaCertified(SchemaReview):
                 self.client.call(
                     self._certified(relay_message(self.signer, ixs)))
             # The parser refuses the message itself (7.15 rule), before any
-            # certified check can run.
-            # 7.15 refuses the duplicate while parsing; the alpha line parses it
-            # and refuses at the fee check. Either way nothing is signed.
-            self.assertRegex(str(refused.exception),
-                             "Malformed Solana transaction|"
-                             "Invalid priority fee")
+            # certified check can run. The alpha line follows 7.16 here.
+            self.assertIn("Malformed Solana transaction",
+                          str(refused.exception))
 
     # The real SoltoshiDICE join, certified by the deployed ClearSign Worker.
 

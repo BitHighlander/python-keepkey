@@ -186,16 +186,14 @@ PIN = "1234"
 BIP44_ADDRESS_N = [2147483692, 2147483648, 2147483648, 0, 0]  # m/44'/0'/0'/0/0
 
 
-def _storage_crc(record, covers_magic=False):
-    """STM32 CRC-32/MPEG-2 over native little-endian 32-bit words.
-
-    Two framed records exist. The 7.16 line covers bytes [4, 2572): everything
-    but the magic, which storage_commit() writes last (the record is staged
-    without it). The alpha line's earlier record covers [0, 2572), magic
-    included. A firmware reads only its own."""
-    start = 0 if covers_magic else len(STORAGE_MAGIC)
-    data = record[start:STORAGE_RECORD_DATA_LEN]
-    if len(data) != STORAGE_RECORD_DATA_LEN - start or len(data) % 4:
+def _storage_crc(record):
+    """STM32 CRC-32/MPEG-2 over native little-endian 32-bit words, covering
+    record bytes [4, 2572): everything but the magic, which storage_commit()
+    writes last (the record is staged without it). The alpha line's earlier
+    record also covered the magic; alpha now writes the 7.16 record, so a CRC
+    over [0, 2572) is a regression and is not accepted."""
+    data = record[len(STORAGE_MAGIC):STORAGE_RECORD_DATA_LEN]
+    if len(data) != STORAGE_RECORD_DATA_LEN - len(STORAGE_MAGIC) or len(data) % 4:
         raise ValueError("storage CRC requires the complete word-aligned record")
     crc = 0xFFFFFFFF
     for pos in range(0, len(data), 4):
@@ -616,17 +614,11 @@ class Emulator(object):
                 continue
             trailer = record[STORAGE_RECORD_DATA_LEN:STORAGE_RECORD_CRC_OFFSET]
             legacy = trailer == b"\xff" * 4
-            verified = False
-            if trailer == STORAGE_RECORD_TRAILER_MAGIC:
-                stored = struct.unpack(
+            verified = (
+                trailer == STORAGE_RECORD_TRAILER_MAGIC
+                and struct.unpack(
                     "<I", record[STORAGE_RECORD_CRC_OFFSET:STORAGE_RECORD_LEN]
-                )[0]
-                # Whichever framing this firmware wrote is the one it reads;
-                # remember it for records this test edits (refresh_crc).
-                for covers_magic in (False, True):
-                    if stored == _storage_crc(record, covers_magic):
-                        verified = True
-                        self.crc_covers_magic = covers_magic
+                )[0] == _storage_crc(record))
             if not legacy and not verified:
                 continue
 
@@ -682,8 +674,7 @@ class Emulator(object):
             raise AssertionError("cannot refresh CRC on an unframed record")
         self.patch(
             off, STORAGE_RECORD_CRC_OFFSET,
-            struct.pack("<I", _storage_crc(
-                record, getattr(self, "crc_covers_magic", False))))
+            struct.pack("<I", _storage_crc(record)))
 
 
 def _teach_pin(client, pin):
