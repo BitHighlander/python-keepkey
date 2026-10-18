@@ -595,7 +595,8 @@ class TestMsgEthereumErc7730Runtime(Erc7730Harness, common.KeepKeyTest):
             "uint8 operation)")
     TRANSFER = "transfer(address to,uint256 amount)"
 
-    def _exec_setup(self, amount_path=True, spender="@.to", memo=None):
+    def _exec_setup(self, amount_path=True, spender="@.to", memo=None,
+                    trailing_data=False, inner_suffix=b""):
         inner_signature = (self.TRANSFER if memo is None else
                            "transfer(address to,uint256 amount,bytes memo)")
         params = {"calleePath": "to"}
@@ -614,9 +615,11 @@ class TestMsgEthereumErc7730Runtime(Erc7730Harness, common.KeepKeyTest):
                 {"path": "amount", "label": "Amount", "format": "tokenAmount",
                  "params": {"tokenPath": "@.to"}}]}}}}
         outer = erc7730_compiler.compile_calldata(
-            outer_descriptor, self.EXEC, 1, ADDRESS)
+            outer_descriptor, self.EXEC, 1, ADDRESS,
+            trailing_data=trailing_data)
         inner = erc7730_compiler.compile_calldata(
-            inner_descriptor, inner_signature, 1, self.USDC)
+            inner_descriptor, inner_signature, 1, self.USDC,
+            trailing_data=trailing_data)
         self._load_signer()
         outer_env = self._envelope(outer)
         inner_def = erc7730.Definition(self._envelope(inner), 1, 1, self.USDC,
@@ -629,6 +632,7 @@ class TestMsgEthereumErc7730Runtime(Erc7730Harness, common.KeepKeyTest):
             call = (inner[38:42] + self._word(OTHER_ADDRESS) +
                     self._word(1500000) + self._word(96) +
                     self._word(len(memo)) + memo + bytes(-len(memo) % 32))
+        call += inner_suffix
         arguments = (self._word(self.USDC) + self._word(0) +
                      self._word(128) + self._word(0) +
                      self._word(len(call)) + call +
@@ -730,11 +734,24 @@ class TestMsgEthereumErc7730Runtime(Erc7730Harness, common.KeepKeyTest):
         self.assertNotIn("Inner signer", [s[0] for s in self.screens])
 
     def test_inner_finite_approve_shows_no_unlimited_warning(self):
-        arguments, catalog = self._exec_approve(self.MAX - 1)
+        # 2^255 - 1: finite under every firmware's threshold.
+        arguments, catalog = self._exec_approve((1 << 255) - 1)
         self._exec_certified(arguments, catalog)
         titles = [s[0] for s in self.screens]
         self.assertNotIn("UNLIMITED approval", titles)
         self.assertIn("Inner action", titles)
+
+    def test_inner_approve_uses_the_top_level_threshold(self):
+        # 7.17: an embedded approve of 2^255 or more is UNLIMITED, as a
+        # top-level one is (7.16 warned only at 2^256 - 1).
+        self.requires_firmware("7.17.0")
+        arguments, catalog = self._exec_approve(1 << 255)
+        self._exec_certified(arguments, catalog)
+        shown = self._approve_screens()
+        self.assertEqual(shown[:2], [
+            ("Contract action", "sign multisig operation"), self.UNLIMITED])
+        self.assertEqual([s[0] for s in self._first_pages()].count(
+            "UNLIMITED approval"), 1)
 
     def test_blind_inner_unlimited_approve_still_warns_in_715(self):
         self.requires_firmware_below("7.16.0")  # 7.16 refuses blind calls
@@ -761,6 +778,214 @@ class TestMsgEthereumErc7730Runtime(Erc7730Harness, common.KeepKeyTest):
                        "Invalid ERC-7730 embedded call")
         self.assertNotIn("UNLIMITED approval", [s[0] for s in self.screens])
         self.assertNotIn(types.ButtonRequest_SignTx, self.button_codes)
+
+    # 7.17: a definition for approve() or increaseAllowance() itself. The
+    # host sends only the selector; the first calldata pass reads both words
+    # and the top-level allowance policy runs on them before any screen.
+    INCREASE = "increaseAllowance(address spender,uint256 addedValue)"
+
+    def _allowance(self, signature, amount, spender=None):
+        """Program and arguments for `signature` granting OTHER_ADDRESS
+        `amount` of USDC."""
+        self.requires_firmware("7.17.0")
+        program = erc7730_compiler.compile_calldata(
+            {"display": {"formats": {signature: {
+                "intent": "Allow spending", "fields": [
+                    {"path": signature.split(",")[0].split(" ")[1],
+                     "label": "Spender", "format": "addressName"},
+                    {"path": signature.split(" ")[-1][:-1],
+                     "label": "Amount", "format": "raw"}]}}}},
+            signature, 1, self.USDC)
+        arguments = (spender or self._word(OTHER_ADDRESS)) + self._word(amount)
+        return program, arguments
+
+    def _allowance_start(self, data):
+        return eth.EthereumSignTx(
+            address_n=PATH, nonce=b"", gas_price=b"\x01",
+            gas_limit=b"\xff\xff", to=self.USDC, value=b"", chain_id=1,
+            data_length=68, data_initial_chunk=data)
+
+    def _allowance_signed(self, program, arguments):
+        """Certified approve: same signature as the ordinary path, which needs
+        all 68 bytes in its first chunk."""
+        baseline, _, _, _ = self._walk(
+            self._allowance_start(program[38:42] + arguments))
+        self.assertTrue(baseline.HasField("signature_r"))
+        envelope = self._preload(program)
+        result, _, passes, _ = self._walk(
+            self._allowance_start(program[38:42]), envelope,
+            arguments=arguments)
+        self.assertIsInstance(result, eth.EthereumTxRequest)
+        self.assertEqual((result.signature_r, result.signature_s),
+                         (baseline.signature_r, baseline.signature_s))
+        self.assertGreater(passes, 1)
+        return self._first_pages()
+
+
+    def test_certified_finite_approve_signs_after_its_review(self):
+        program, arguments = self._allowance(self.APPROVE, 42)
+        shown = self._allowance_signed(program, arguments)
+        self.assertNotIn("UNLIMITED approval", [s[0] for s in shown])
+        fields = [s for s in shown
+                  if s[0] in ("Contract action", "Signer field")]
+        self.assertEqual(fields, [
+            ("Contract action", "Allow spending"),
+            ("Signer field", "Spender:\n0x" + OTHER_ADDRESS.hex()),
+            ("Signer field", "Amount:\n42")])
+
+    def test_certified_unlimited_approve_warns_before_any_screen(self):
+        # 2^255 and up is UNLIMITED, for approve() and increaseAllowance().
+        for signature in (self.APPROVE, self.INCREASE):
+            for amount in (self.MAX, 1 << 255):
+                program, arguments = self._allowance(signature, amount)
+                shown = self._allowance_signed(program, arguments)
+                self.assertEqual((signature, amount, shown[0]),
+                                 (signature, amount, self.UNLIMITED))
+                self.assertEqual(
+                    [s[0] for s in shown].count("UNLIMITED approval"), 1)
+                self.assertIn(("Contract action", "Allow spending"), shown)
+
+    def test_declining_a_certified_unlimited_approve_signs_nothing(self):
+        program, arguments = self._allowance(self.APPROVE, self.MAX)
+        envelope = self._preload(program)
+        result, _, _, _ = self._walk(
+            self._allowance_start(program[38:42]), envelope,
+            arguments=arguments, cancel_title="UNLIMITED approval")
+        assert_failure(self, result, types.Failure_ActionCancelled,
+                       "Signing cancelled by user")
+        self.assertEqual([s[0] for s in self.screens], ["UNLIMITED approval"])
+
+    def test_certified_approve_with_a_dirty_spender_word_is_refused(self):
+        # Refused before any screen: the address word does not decode (and
+        # the allowance policy refuses a dirty spender word in any case).
+        program, arguments = self._allowance(
+            self.APPROVE, self.MAX, spender=b"\x01" + bytes(11) + OTHER_ADDRESS)
+        envelope = self._preload(program)
+        result, buttons, _, _ = self._walk(
+            self._allowance_start(program[38:42]), envelope,
+            arguments=arguments)
+        assert_failure(self, result, types.Failure_SyntaxError,
+                       "ERC-7730 calldata does not match definition")
+        self.assertEqual(buttons, 0)
+
+    def test_certified_approve_words_swapped_in_a_later_pass_are_refused(self):
+        # The allowance facts come from the first pass; every later pass,
+        # the signing pass included, must match the digest it fixed. An
+        # unlimited amount or a dirty spender word slipped into any of them
+        # is refused, with no UNLIMITED warning and no signature.
+        program, arguments = self._allowance(self.APPROVE, 42)
+        start = self._allowance_start(program[38:42])
+        envelope = self._preload(program)
+        result, _, passes, _ = self._walk(start, envelope, arguments=arguments)
+        self.assertTrue(result.HasField("signature_r"))
+        self.assertGreater(passes, 1)
+        unlimited = self._word(OTHER_ADDRESS) + self._word(self.MAX)
+        dirty = b"\x01" + bytes(11) + OTHER_ADDRESS + self._word(42)
+        for swapped in (unlimited, dirty):
+            for altered in range(2, passes + 1):
+                envelope = self._preload(program)
+                result, _, _, _ = self._walk(
+                    start, envelope, arguments=arguments,
+                    altered=(altered, swapped))
+                assert_failure(self, result, types.Failure_SyntaxError,
+                               "ERC-7730 calldata does not match definition")
+                self.assertNotIn("UNLIMITED approval",
+                                 [s[0] for s in self.screens])
+
+    def test_plain_approve_still_needs_its_68_bytes_up_front(self):
+        # Without a definition, approve() and increaseAllowance() carry both
+        # words in their first chunk, or are refused before any screen; a
+        # certified approve signed just before changes nothing.
+        for signature in (self.APPROVE, self.INCREASE):
+            program, arguments = self._allowance(signature, self.MAX)
+            start = self._allowance_start(program[38:42])
+            for _ in range(2):
+                result, buttons, _, _ = self._walk(start, arguments=arguments)
+                assert_failure(self, result, types.Failure_SyntaxError,
+                               "Approval requires at least 68 initial bytes")
+                self.assertEqual(buttons, 0)
+                self._allowance_signed(program, arguments)
+
+    def test_certified_dirty_approve_word_is_malformed(self):
+        # A definition whose first argument is no address decodes a dirty
+        # spender word; the allowance policy refuses it before any screen.
+        self.requires_firmware("7.17.0")
+        signature = "approve(uint256 spender,uint256 amount)"
+        program = bytearray(erc7730_compiler.compile_calldata(
+            {"display": {"formats": {signature: {
+                "intent": "Allow spending", "fields": [
+                    {"path": "spender", "label": "Spender", "format": "raw"},
+                    {"path": "amount", "label": "Amount", "format": "raw"}]}}}},
+            signature, 1, self.USDC))
+        program[38:42] = bytes.fromhex("095ea7b3")
+        program = bytes(program)
+        envelope = self._preload(program)
+        result, buttons, _, _ = self._walk(
+            self._allowance_start(program[38:42]), envelope,
+            arguments=b"\x01" + bytes(11) + OTHER_ADDRESS + self._word(42))
+        assert_failure(self, result, types.Failure_SyntaxError,
+                       "Malformed ERC20 approval")
+        self.assertEqual(buttons, 0)
+
+    def test_certified_approve_with_fewer_arguments_reads_the_amount_word(self):
+        # A definition declaring approve(address) with trailing data allowed
+        # still gets the policy on the real amount word, then shows that word
+        # as the extra data.
+        self.requires_firmware("7.17.0")
+        signature = "approve(address spender)"
+        program = bytearray(erc7730_compiler.compile_calldata(
+            {"display": {"formats": {signature: {
+                "intent": "Allow spending", "fields": [
+                    {"path": "spender", "label": "Spender",
+                     "format": "addressName"}]}}}},
+            signature, 1, self.USDC, trailing_data=True))
+        program[38:42] = bytes.fromhex("095ea7b3")
+        arguments = self._word(OTHER_ADDRESS) + self._word(self.MAX)
+        shown = self._allowance_signed(bytes(program), arguments)
+        self.assertEqual(shown[0], self.UNLIMITED)
+        self.assertIn(self._extra_data(self._word(self.MAX)), shown)
+
+    NFT_APPROVE = "approve(address to,uint256 tokenId)"
+
+    def _nft_approve(self, fields):
+        return erc7730_compiler.compile_calldata(
+            {"display": {"formats": {self.NFT_APPROVE: {
+                "intent": "Approve NFT", "fields": fields}}}},
+            self.NFT_APPROVE, 1, self.USDC)
+
+    def test_certified_nft_approve_of_a_high_token_id_is_not_unlimited(self):
+        # ERC-721 approve(to, tokenId) shares approve()'s selector. Shown
+        # only as an nftName token id, the second word grants one token, so
+        # an ENS-style hashed id of 2^255 or more is no UNLIMITED allowance.
+        self.requires_firmware("7.17.0")
+        operator = {"path": "to", "label": "Operator", "format": "addressName"}
+        token = {"path": "tokenId", "label": "Token", "format": "nftName",
+                 "params": {"collectionPath": "@.to"}}
+        token_id = (1 << 255) + 1001
+        arguments = self._word(OTHER_ADDRESS) + self._word(token_id)
+        shown = self._allowance_signed(self._nft_approve([operator, token]),
+                                       arguments)
+        self.assertNotIn("UNLIMITED approval", [s[0] for s in shown])
+        self.assertEqual(
+            [s for s in shown if s[0] in ("Contract action", "Signer field")], [
+                ("Contract action", "Approve NFT"),
+                ("Signer field", "Operator:\n0x" + OTHER_ADDRESS.hex()),
+                ("Signer field", "Token:\nToken ID %d\nCollection\n"
+                 "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48" % token_id)])
+        # Shown any other way as well, the word is still an allowance amount.
+        raw = {"path": "tokenId", "label": "Raw", "format": "raw"}
+        shown = self._allowance_signed(
+            self._nft_approve([operator, token, raw]), arguments)
+        self.assertEqual(shown[0], self.UNLIMITED)
+        # ...and a dirty operator word is refused as for any approve().
+        envelope = self._preload(self._nft_approve([operator, token]))
+        result, buttons, _, _ = self._walk(
+            self._allowance_start(bytes.fromhex("095ea7b3")), envelope,
+            arguments=b"\x01" + bytes(11) + OTHER_ADDRESS +
+            self._word(token_id))
+        assert_failure(self, result, types.Failure_SyntaxError,
+                       "ERC-7730 calldata does not match definition")
+        self.assertEqual(buttons, 0)
 
     def test_inner_call_without_a_definition_is_blind_in_715(self):
         self.requires_firmware_below("7.16.0")  # 7.16 refuses instead
@@ -1068,6 +1293,175 @@ class TestMsgEthereumErc7730Runtime(Erc7730Harness, common.KeepKeyTest):
         self.assertNotIn("Blind signature", [s[0] for s in self.screens])
         self.assertIn(("Signer field", "Data:\nShown above in full: 200 bytes"),
                       self._first_pages())
+
+    PERMIT = ("Permit(address owner,address spender,uint256 value,"
+              "uint256 nonce,uint256 deadline)")
+
+    def test_typed_data_to_is_the_verifying_contract(self):
+        # 7.17: in typed data @.to is the domain's verifyingContract, the
+        # deployment the definition is bound to, so an ERC-2612 permit names
+        # its token by the contract it is signed for.
+        self.requires_firmware("7.17.0")
+        doc = {
+            "types": {
+                "EIP712Domain": [
+                    {"name": "name", "type": "string"},
+                    {"name": "version", "type": "string"},
+                    {"name": "chainId", "type": "uint256"},
+                    {"name": "verifyingContract", "type": "address"}],
+                "Permit": [
+                    {"name": "owner", "type": "address"},
+                    {"name": "spender", "type": "address"},
+                    {"name": "value", "type": "uint256"},
+                    {"name": "nonce", "type": "uint256"},
+                    {"name": "deadline", "type": "uint256"}]},
+            "primaryType": "Permit",
+            "domain": {"name": "USD Coin", "version": "2", "chainId": 1,
+                       "verifyingContract": "0x" + self.USDC.hex()},
+            "message": {"owner": "0x" + ADDRESS.hex(),
+                        "spender": "0x" + OTHER_ADDRESS.hex(),
+                        "value": 1500000, "nonce": 0,
+                        "deadline": 1900000000}}
+        program = erc7730_compiler.compile_eip712(
+            {"display": {"formats": {self.PERMIT: {
+                "intent": "Authorize spending", "fields": [
+                    {"path": "spender", "label": "Spender",
+                     "format": "addressName"},
+                    {"path": "value", "label": "Amount",
+                     "format": "tokenAmount",
+                     "params": {"tokenPath": "@.to"}},
+                    {"path": "@.to", "label": "Token",
+                     "format": "addressName"}]}}}},
+            doc)
+        start = eth.EthereumSignTypedData(
+            address_n=PATH, primary_type="Permit", metamask_v4_compat=True)
+        baseline, _, _, _ = self._walk(start, doc=doc)
+        self.assertIsInstance(baseline, eth.EthereumTypedDataSignature)
+        envelope = self._preload(program)
+        result, _, _, _ = self._walk(start, envelope, doc)
+        self.assertIsInstance(result, eth.EthereumTypedDataSignature)
+        self.assertEqual(result.signature, baseline.signature)
+        self.assertEqual(
+            [s for s in self._first_pages() if s[0] == "Signer field"], [
+                ("Signer field", "Spender:\n0x" + OTHER_ADDRESS.hex()),
+                ("Signer field", "Amount:\n1.5 USDC"),
+                ("Signer field", "Token:\n0xA0b86991c6218b36c1d19D4a2e9Eb0cE"
+                                 "3606eB48")])
+
+    # 7.17: a definition may allow bytes after the ABI-encoded arguments, as
+    # referral and integrator tags (1inch, Morpho vaults) append. The review
+    # says they exist; a definition that does not allow them is refused.
+    DEPOSIT = "deposit(uint256 assets,address receiver)"
+
+    def _deposit(self, trailing_data):
+        return erc7730_compiler.compile_calldata(
+            {"display": {"formats": {self.DEPOSIT: {
+                "intent": "Deposit", "fields": [
+                    {"path": "assets", "label": "Assets", "format": "raw"},
+                    {"path": "receiver", "label": "Receiver",
+                     "format": "addressName"}]}}}},
+            self.DEPOSIT, 1, ADDRESS, trailing_data=trailing_data)
+
+    @staticmethod
+    def _extra_data(tag):
+        """The device's screen for a suffix: shown in hex up to 128 bytes,
+        stated by its length beyond."""
+        if len(tag) == 1:
+            text = ("1 more byte follows the arguments. The description "
+                    "above does not cover it")
+        else:
+            text = ("%d more bytes follow the arguments. The description "
+                    "above does not cover them" % len(tag))
+        return ("Extra data", text + (":\n0x" + tag.hex() if len(tag) <= 128
+                                      else ". They are too long to show "
+                                      "here."))
+
+    def test_allowed_trailing_bytes_are_shown(self):
+        self.requires_firmware("7.17.0")
+        arguments = self._word(42) + self._word(OTHER_ADDRESS)
+        for tag in (b"\x01", bytes.fromhex("0bad1dea"), bytes(range(24)),
+                    bytes(32), bytes(range(40)), bytes(range(128)),
+                    bytes(range(129)), bytes(range(256)) * 2):
+            self._certified(self._deposit(True), arguments + tag)
+            shown = [s for s in self._first_pages()
+                     if s[0] in ("Signer field", "Extra data")]
+            self.assertEqual(shown, [
+                ("Signer field", "Assets:\n42"),
+                ("Signer field", "Receiver:\n0x" + OTHER_ADDRESS.hex()),
+                self._extra_data(tag)])
+        # Without a tag there is nothing to say.
+        self._certified(self._deposit(True), arguments)
+        self.assertNotIn("Extra data", [s[0] for s in self.screens])
+
+    def test_a_suffix_altered_in_any_pass_is_refused(self):
+        # The suffix is bound by the reviewed digest like the arguments.
+        self.requires_firmware("7.17.0")
+        program = self._deposit(True)
+        arguments = (self._word(42) + self._word(OTHER_ADDRESS) +
+                     bytes.fromhex("0bad1dea"))
+        start = self._audit_start(program, 4 + len(arguments))
+        envelope = self._preload(program)
+        result, _, passes, _ = self._walk(start, envelope, arguments=arguments)
+        self.assertTrue(result.HasField("signature_r"))
+        self.assertGreater(passes, 1)
+        for altered in range(1, passes + 1):
+            envelope = self._preload(program)
+            result, _, _, _ = self._walk(
+                start, envelope, arguments=arguments,
+                altered=(altered, arguments[:-4] + bytes.fromhex("deadbeef")))
+            assert_failure(self, result, types.Failure_SyntaxError,
+                           "ERC-7730 calldata does not match definition")
+
+    def test_trailing_bytes_are_refused_unless_the_definition_allows(self):
+        self.requires_firmware("7.17.0")
+        program = self._deposit(False)
+        # A misaligned tag fails the stream's length check; a whole extra
+        # word is no canonical encoding of the arguments.
+        for tag, message in (
+                (bytes.fromhex("0bad1dea"), "Invalid ERC-7730 execution program"),
+                (bytes(range(32)), "ERC-7730 calldata does not match definition")):
+            arguments = self._word(42) + self._word(OTHER_ADDRESS) + tag
+            envelope = self._preload(program)
+            result, buttons, _, _ = self._walk(
+                self._audit_start(program, 4 + len(arguments)), envelope,
+                arguments=arguments)
+            assert_failure(self, result, types.Failure_SyntaxError, message)
+            self.assertEqual(buttons, 0)
+
+    def test_an_inner_call_never_carries_trailing_bytes(self):
+        # Only the outer call may carry bytes after its arguments: an inner
+        # call with any is refused, even when both definitions allow them.
+        self.requires_firmware("7.17.0")
+        # A misaligned tag leaves the inner definition unusable; a whole
+        # extra word is no canonical encoding of the inner arguments.
+        for tag, code, message in (
+                (bytes.fromhex("0bad1dea"), types.Failure_Other,
+                 "Inner call cannot be clear-signed"),
+                (bytes(range(32)), types.Failure_SyntaxError,
+                 "ERC-7730 calldata does not match definition")):
+            start, arguments, outer_def, inner_def = self._exec_setup(
+                trailing_data=True, inner_suffix=tag)
+            erc7730.preload(self.client, outer_def)
+            self._drop_setup_screenshots()
+            result, _, _, _ = self._walk(
+                start, arguments=arguments,
+                catalog=erc7730.Catalog((outer_def, inner_def)))
+            assert_failure(self, result, code, message)
+            self.assertNotIn("Inner field", [s[0] for s in self.screens])
+            self.assertNotIn("Extra data", [s[0] for s in self.screens])
+            self.assertNotIn(types.ButtonRequest_SignTx, self.button_codes)
+        # The same call without the tag clear-signs under those definitions.
+        _, arguments, outer_def, inner_def = self._exec_setup(
+            trailing_data=True)
+        self._exec_certified(arguments, erc7730.Catalog((outer_def, inner_def)))
+        self.assertIn(("Inner field", "Amount:\n1.5 USDC"), self._first_pages())
+
+    def test_declining_the_extra_data_screen_signs_nothing(self):
+        self.requires_firmware("7.17.0")
+        self._declined(self._deposit(True),
+                       self._word(42) + self._word(OTHER_ADDRESS) + b"\x01",
+                       "Extra data")
+        self.assertEqual(self.screens[-1], self._extra_data(b"\x01"))
 
     def test_multiline_values_split_between_lines(self):
         # A label of 64 non-ASCII bytes escapes to 256 characters, leaving 93

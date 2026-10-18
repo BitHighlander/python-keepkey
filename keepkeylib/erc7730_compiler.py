@@ -367,7 +367,8 @@ class CalldataCompiler(object):
     def __init__(self, descriptor, signature, chain_id, address,
                  provider_id=1, issuance_epoch=0, revocation_epoch=0,
                  token_records=(), network_records=(), definition_kind=1,
-                 primary_type_hash=None, domain_constraints=()):
+                 primary_type_hash=None, domain_constraints=(),
+                 trailing_data=False):
         self.descriptor = descriptor
         self.signature = signature
         self.chain_id = int(chain_id)
@@ -382,6 +383,11 @@ class CalldataCompiler(object):
         self.definition_kind = definition_kind
         self.primary_type_hash = primary_type_hash
         self.domain_constraints = list(domain_constraints)
+        # The signer allows bytes after the ABI-encoded arguments (a referral
+        # or integrator tag); the device says they exist. Calldata only.
+        self.trailing_data = bool(trailing_data)
+        if self.trailing_data and definition_kind != 1:
+            raise ValueError("trailing data applies to calldata definitions")
         if definition_kind not in (1, 2):
             raise ValueError("compiler supports calldata or EIP-712 programs")
         if definition_kind == 2 and (primary_type_hash is None or
@@ -968,7 +974,8 @@ class CalldataCompiler(object):
                                              if _ != 1)).digest()
         selector = (keccak256(canonical_signature.encode("ascii"))[:4] + bytes(28)
                     if self.definition_kind == 1 else self.primary_type_hash)
-        header = (b"C773" + bytes([1, 2, 0, self.definition_kind]) + _u16(0) +
+        header = (b"C773" + bytes([1, 2, TRAILING_DATA if self.trailing_data
+                                   else 0, self.definition_kind]) + _u16(0) +
                   _u64(self.chain_id) + self.address + selector +
                   hashlib.sha256(source).digest() + COMPILER_ID + token_hash +
                   _u32(self.provider_id) + _u32(self.issuance_epoch) +
@@ -977,6 +984,10 @@ class CalldataCompiler(object):
             raise AssertionError("invalid C773 header size")
         return header + b"".join(bytes([kind]) + _u32(len(value)) + value
                                  for kind, value in sections)
+
+
+# Program header byte 6 (ERC7730_PROGRAM_FLAG_TRAILING_DATA).
+TRAILING_DATA = 1
 
 
 # What the device executes: a mirror of keepkey-firmware's
@@ -1005,8 +1016,10 @@ DEVICE_CAPABILITIES = {
              frozenset((1, 15))),
     },
     "path_sources": frozenset((1, 2, 3)),
-    # @.from, @.to and @.value, calldata definitions only
+    # @.from, @.to and @.value for calldata definitions
     "containers": frozenset((1, 2, 3)),
+    # @.to for typed data: the domain's verifyingContract
+    "typed_containers": frozenset((2,)),
     # 2: every element, bound to the iteration's current element
     "path_step_opcodes": frozenset((1, 2)),
     # only "optional" (3), which is always shown
@@ -1014,6 +1027,8 @@ DEVICE_CAPABILITIES = {
     "conditions": True,
     "alias_set_max": 4,
     "enum_max": 16,
+    # header flag TRAILING_DATA: bytes may follow a call's arguments
+    "trailing_data": True,
     # signer text shown inside a value's screen, and unit decimals
     "signer_text_max": 64,
     "unit_decimals_max": 77,
@@ -1117,6 +1132,11 @@ def _abi_walk(nodes, steps):
 
 def device_refusal(program, capabilities=DEVICE_CAPABILITIES):
     """Why the device would refuse `program` at preload, or None."""
+    # Header byte 6 holds flags: TRAILING_DATA alone, for calldata alone.
+    if program[6] & ~TRAILING_DATA or (program[6] and program[7] != 1):
+        return "program header flags are not executed"
+    if program[6] and not capabilities.get("trailing_data"):
+        return "trailing data is not executed"
     sections = _program_sections(program)
     u16 = lambda data, at: struct.unpack(">H", data[at:at + 2])[0]
 
@@ -1195,8 +1215,8 @@ def device_refusal(program, capabilities=DEVICE_CAPABILITIES):
         at += 4
         if source not in capabilities["path_sources"]:
             return "path source %d is not executed" % source
-        if source == 2 and (index not in capabilities["containers"] or
-                            not calldata):
+        if source == 2 and index not in capabilities.get(
+                "containers" if calldata else "typed_containers", ()):
             return "container %d is not executed" % index
         if source == 3 and index >= 64:
             return "path names a literal beyond the table"
