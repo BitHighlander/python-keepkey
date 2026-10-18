@@ -540,6 +540,10 @@ FULL_SEQUENCE_TESTS = {
      'test_certifying_shows_every_contact_and_signs_only_the_commitment'),
     ('test_msg_ethereum_certified_contacts',
      'test_a_send_to_a_contact_names_it_and_still_shows_the_address'),
+    ('test_msg_signtx_certified_contacts',
+     'test_certifying_shows_each_contact_as_its_coins_address'),
+    ('test_msg_signtx_certified_contacts',
+     'test_a_payment_to_a_contact_names_it_beside_the_full_address'),
     ('test_msg_ethereum_clear_signing', 'test_binding_happy_path_signs_and_recovers'),
     ('test_msg_ethereum_clear_signing', 'test_clearsign_uniswap_v2_eth_to_token'),
     # ERC-7730 runtime: the order of the screens is the claim.
@@ -2831,6 +2835,82 @@ SECTIONS = [
           'list is the assertion.',
           []),
      ]),
+    ('AC', 'Certified Contacts - Bitcoin and Other UTXO Coins', '7.17.0',
+     'Section AB names certified contacts on an EVM send. This section does the same for a '
+     'Bitcoin-family payment. A contact is an exact output script bound to one coin by its '
+     'CAIP-2 network, in the same signed address book. The proof rides on SignTx itself '
+     '(contact_proof), so no extra message is needed and firmware without the feature simply '
+     'ignores it. The bitcoin-only product carries the feature too.',
+     [
+         'RULE: a name is shown only on an output given by address whose script the user approved',
+         'on this device, under that name, for this coin. The full address is always on the same',
+         'screen, and a proof never makes a payment fail.',
+         '',
+         '- Certify: one summary screen, then "<name> / <coin>" and the script as that coin\'s',
+         '  address for EVERY contact. Only P2PKH, P2SH, P2WPKH, P2WSH and P2TR can be certified.',
+         '- Pay:     "Send <amount> to <name>" with the full address below it, in place of',
+         '           "Send <amount> to" and the address. Same number of screens.',
+         '- Never on change, OP_RETURN, another output, or the same script on another coin.',
+         '- A proof that fails, or is for another script, book or coin, is ignored: the review is',
+         '  the ordinary one, frame count included, and the signed transaction is identical.',
+         '',
+         'KNOWN LIMIT: one contact per transaction, and as in section AB no revocation.',
+         '',
+         'The request, the commitment and the proof are built in the test from the format alone,',
+         'and the device signature is checked with python-ecdsa.',
+     ],
+     [
+         ('AC1', 'test_msg_signtx_certified_contacts',
+          'test_certifying_shows_each_contact_as_its_coins_address',
+          'Every contact is reviewed as its coin\'s address before anything is signed',
+          'Five Bitcoin contacts, one per script type, are certified with AdvancedMode off. The '
+          'device shows the count and revision, then each name with "Bitcoin" and, on its own '
+          'screen, the address it renders from the script. The signature verifies, with an '
+          'independent library, over the commitment the test computed itself.',
+          ['Address Book: Approve 5 contacts? Revision 4',
+           'Certify Contact: Alice / Bitcoin',
+           'Destination: bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4']),
+         ('AC2', 'test_msg_signtx_certified_contacts',
+          'test_a_payment_to_a_contact_names_it_beside_the_full_address',
+          'A payment to a contact names it beside the full address',
+          'The same 0.001 BTC payment is signed three times. Without a proof the output screen '
+          'shows the address. With Alice\'s proof it reads "Send 0.001 BTC to Alice" over her full '
+          'address, with the same number of screens and a byte-identical signed transaction. The '
+          'third payment, with no proof, is the baseline again: one proof names one transaction.',
+          ['Send 0.001 BTC to the full address (baseline)',
+           'Send 0.001 BTC to Alice, then the full address']),
+         ('AC3', 'test_msg_signtx_certified_contacts',
+          'test_every_script_type_is_named_and_only_its_own_output',
+          'Every script type is named, and only its own output',
+          'One transaction pays all five contacts (P2WPKH, P2TR, P2PKH, P2SH, P2WSH). Signed once '
+          'with each contact\'s proof, exactly that contact\'s output is named each time.',
+          []),
+         ('AC4', 'test_msg_signtx_certified_contacts',
+          'test_change_and_data_outputs_are_never_named',
+          'Change, data and other outputs are never named',
+          'Alice twice, Bob, an OP_RETURN memo and change. With Alice\'s proof both of her outputs '
+          'are named; every other screen is pixel-identical to the unnamed review.',
+          []),
+         ('AC5', 'test_msg_signtx_certified_contacts',
+          'test_an_unusable_proof_is_ignored_and_the_payment_still_signs',
+          'An unusable proof is ignored and the payment still signs',
+          'An altered name, an altered signature, a proof over a different book, another '
+          'contact\'s proof and a truncated proof. Each payment is reviewed and signed exactly as '
+          'without a proof: real world never rejected.',
+          []),
+         ('AC6', 'test_msg_signtx_certified_contacts',
+          'test_a_contact_names_only_its_own_coin',
+          'A contact names only its own coin',
+          'Alice\'s script is also a Testnet address. Her Bitcoin proof on a Testnet payment to '
+          'that address names nobody.',
+          []),
+         ('AC7', 'test_msg_signtx_certified_contacts',
+          'test_a_book_the_device_cannot_show_is_refused_unreviewed',
+          'A contact the device cannot show is refused before any screen',
+          'A data script, a network no coin is bound to, and one name on two scripts. Each book '
+          'is refused with "Invalid address book" before any confirmation.',
+          []),
+     ]),
     ('I', 'Session and Trust Lifetime', '7.15.0',
      'Clear-signing works by trusting somebody else. A provider key loaded with LoadClearsignSigner '
      'decides which transactions the device is willing to describe in words, and AdvancedMode decides '
@@ -3789,6 +3869,7 @@ _TEST_CAPABILITY = {
 _MODULE_CAPABILITY = {
     'test_msg_ethereum_erc7730_runtime': 'erc7730-runtime-review',
     'test_msg_ethereum_certified_contacts': 'certified-contacts',
+    'test_msg_signtx_certified_contacts': 'certified-contacts-utxo',
 }
 
 
@@ -4122,6 +4203,9 @@ MUST_RUN_MODULES = {
     'test_msg_ethereum_erc7730_runtime': '7.15.0',
     # Certified contacts: every row in section AB.
     'test_msg_ethereum_certified_contacts': '7.15.0',
+    # Certified UTXO contacts: every row in section AC, in both products. The
+    # Bitcoin Cash cross-coin case is full-only and not a section row.
+    'test_msg_signtx_certified_contacts': '7.17.0',
 }
 
 # A module can be mandatory for the regular product while being intentionally
