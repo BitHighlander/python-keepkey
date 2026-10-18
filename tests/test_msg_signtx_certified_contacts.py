@@ -15,6 +15,10 @@ coin reads "Send <amount> to <name>", with the full address below it. A proof
 the device cannot use is ignored, and the transaction is reviewed and signed
 as usual.
 
+A UTXO_SCRIPT leaf is tagged KKABUTXO (EVM leaves keep KKABLEAF), so a book
+signed by alpha firmware before 7.17, which showed scripts only as hex, never
+names a Bitcoin output.
+
 The request, commitment and proof are built here from the format alone, and
 the device's signature is checked with python-ecdsa. The inputs use made-up
 outpoints: the device never asks for a segwit input's previous transaction.
@@ -29,6 +33,7 @@ import oled_text
 from ecdsa import SECP256k1, VerifyingKey, util
 
 from keepkeylib import messages_pb2 as proto
+from keepkeylib import messages_ethereum_pb2 as eth_proto
 from keepkeylib import types_pb2 as types
 from keepkeylib.tools import parse_path
 
@@ -79,7 +84,7 @@ def _sha(data):
 
 def _levels(book):
     """Merkle levels, leaves first; a short level repeats its last leaf."""
-    level = [_sha(b"KKABLEAF" + _entry(*c)) for c in book]
+    level = [_sha(b"KKABUTXO" + _entry(*c)) for c in book]
     width = 1
     while width < len(level):
         width *= 2
@@ -115,15 +120,20 @@ def proof(book, index, public_key, signature, revision=REVISION):
             + bytes([index, len(siblings)]) + b"".join(siblings))
 
 
-def _out(address, amount):
-    return types.TxOutputType(address=address, amount=amount,
-                              script_type=OUTPUT_TYPE[address])
+def _out(address, amount, script_type=None):
+    return types.TxOutputType(
+        address=address, amount=amount,
+        script_type=OUTPUT_TYPE[address] if script_type is None
+        else script_type)
 
 
 class TestMsgSigntxCertifiedContacts(common.KeepKeyTest):
 
     def setUp(self):
         super(TestMsgSigntxCertifiedContacts, self).setUp()
+        # Version first: firmware before 7.15 reports no capability list.
+        self.requires_firmware("7.17.0")
+        self.requires_message("ClearsignAttestorSign")
         self.requires_release_capability("certified-contacts-utxo")
         self.setup_mnemonic_allallall()
 
@@ -303,6 +313,49 @@ class TestMsgSigntxCertifiedContacts(common.KeepKeyTest):
             contact_proof=carol_cash))
         self.assertEqual(len(self._shown(
             screens, "Send 0.009 BCH to Carol cash\n" + CAROL_BCH)), 1)
+
+    def test_a_long_name_never_splits_the_address(self):
+        # 24 characters, the most, and a two-line address: the name gets the
+        # first page and the address the second, whole.
+        long_name = "W" * 24
+        book = ((BTC, ERIN, long_name),)
+        baseline, (_, signed) = self._sign([_out(ERIN, 987654)])
+        named, (_, tx) = self._sign([_out(ERIN, 987654)],
+                                    self._proof(0, book))
+        self.assertEqual(len(named), len(baseline) + 1)
+        first = self._shown(named, "Send 0.00987654 BTC to " + long_name)
+        self.assertEqual(len(first), 1)
+        self.assertTrue(oled_text.shows(named[first[0] + 1], ERIN))
+        self.assertEqual(tx, signed)
+
+    def test_the_address_beside_a_name_is_spelled_as_certified(self):
+        # The same script in another spelling is still the contact: the
+        # screen shows the spelling the user certified.
+        alice = self._proof(0)
+        screens, _ = self._sign([_out(ALICE.upper(), 100000, types.PAYTOWITNESS)],
+                                alice)
+        self.assertEqual(len(self._shown(
+            screens, "Send 0.001 BTC to Alice\n" + ALICE)), 1)
+
+        self.requires_fullFeature()
+        carol_cash = self._proof(0, ((BCH, CAROL, "Carol cash"),))
+        inputs = [types.TxInputType(
+            address_n=parse_path("44'/145'/0'/0/0"), amount=1000000,
+            prev_hash=bytes([0xB2]) * 32, prev_index=0,
+            script_type=types.SPENDADDRESS)]
+        # CAROL is the legacy spelling of CAROL_BCH, and reads like Bitcoin.
+        screens, _ = self._capturing(lambda: self.client.sign_tx(
+            "BitcoinCash", inputs, [_out(CAROL, 900000)],
+            contact_proof=carol_cash))
+        self.assertEqual(len(self._shown(
+            screens, "Send 0.009 BCH to Carol cash\n" + CAROL_BCH)), 1)
+
+    def test_ethereum_metadata_never_reports_a_bitcoin_contact_verified(self):
+        self.requires_fullFeature()
+        ack = self.client.call_raw(
+            eth_proto.EthereumTxMetadata(signed_payload=self._proof(0)))
+        self.assertIsInstance(ack, eth_proto.EthereumMetadataAck)
+        self.assertEqual(ack.display_summary, "Invalid contact")
 
     def test_a_book_the_device_cannot_show_is_refused_unreviewed(self):
         bad = {
