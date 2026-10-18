@@ -2843,13 +2843,15 @@ SECTIONS = [
      'ignores it. The bitcoin-only product carries the feature too.',
      [
          'RULE: a name is shown only on an output given by address whose script the user approved',
-         'on this device, under that name, for this coin. The full address is always on the same',
-         'screen, and a proof never makes a payment fail.',
+         'on this device, under that name, for this coin. The full address is always shown, whole,',
+         'and a proof never makes a payment fail.',
          '',
          '- Certify: one summary screen, then "<name> / <coin>" and the script as that coin\'s',
          '  address for EVERY contact. Only P2PKH, P2SH, P2WPKH, P2WSH and P2TR can be certified.',
          '- Pay:     "Send <amount> to <name>" with the full address below it, in place of',
-         '           "Send <amount> to" and the address. Same number of screens.',
+         '           "Send <amount> to" and the address. Same number of screens, unless the name',
+         '           and address do not fit one: then the address gets its own page, never split.',
+         '           The address is spelled as certified, whatever spelling the host sent.',
          '- Never on change, OP_RETURN, another output, or the same script on another coin.',
          '- A proof that fails, or is for another script, book or coin, is ignored: the review is',
          '  the ordinary one, frame count included, and the signed transaction is identical.',
@@ -2909,6 +2911,26 @@ SECTIONS = [
           'A contact the device cannot show is refused before any screen',
           'A data script, a network no coin is bound to, and one name on two scripts. Each book '
           'is refused with "Invalid address book" before any confirmation.',
+          []),
+         ('AC8', 'test_msg_signtx_certified_contacts',
+          'test_a_long_name_never_splits_the_address',
+          'A long name never splits the address',
+          'A 24-character name on a P2WSH payment. The name and amount get the first page and '
+          'the whole address the second, one screen more than the baseline; the signed '
+          'transaction is identical.',
+          ['1/2: Send 0.00987654 BTC to WWWWWWWWWWWWWWWWWWWWWWWW', '2/2: the full address']),
+         ('AC9', 'test_msg_signtx_certified_contacts',
+          'test_the_address_beside_a_name_is_spelled_as_certified',
+          'The address beside a name is spelled as certified',
+          'Alice\'s address sent in uppercase, and a Bitcoin Cash contact paid to the legacy '
+          'spelling of its script, which reads like a Bitcoin address. Both are named with the '
+          'address the user certified: lowercase bech32 and the bitcoincash: CashAddr.',
+          []),
+         ('AC10', 'test_msg_signtx_certified_contacts',
+          'test_ethereum_metadata_never_reports_a_bitcoin_contact_verified',
+          'An Ethereum metadata message never reports a Bitcoin contact as verified',
+          'A valid Bitcoin contact proof sent as EthereumTxMetadata is answered "Invalid contact": '
+          'it could never name an Ethereum recipient.',
           []),
      ]),
     ('I', 'Session and Trust Lifetime', '7.15.0',
