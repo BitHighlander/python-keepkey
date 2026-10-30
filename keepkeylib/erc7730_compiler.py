@@ -791,8 +791,23 @@ class CalldataCompiler(object):
                     if params.get(key):
                         arguments.append((role, 1, intern_path(
                             _resolve_path(root, params[key]))))
+            # KeepKey 7.17 constraints, checked on the device against the
+            # signed bytes (ERC-7730 has no such parameter): "recipient" on
+            # an addressName says when the address is not the signer;
+            # "equalsTxValue" on an amount refuses a call whose native value
+            # differs from it.
+            flags = 0
+            if params.get("recipient"):
+                if kind != 10:
+                    raise ValueError("recipient applies to addressName")
+                flags |= FORMATTER_FLAG_RECIPIENT
+            if params.get("equalsTxValue"):
+                if kind != 2 or self.definition_kind != 1:
+                    raise ValueError(
+                        "equalsTxValue applies to a calldata amount")
+                flags |= FORMATTER_FLAG_TX_VALUE
             formatter_index = len(formatters)
-            formatters.append((kind, arguments))
+            formatters.append((kind, arguments, flags))
             condition = ABSENT
             visibility = field.get("visible")
             if visibility == "optional":
@@ -922,8 +937,8 @@ class CalldataCompiler(object):
                 for opcode, path, literal_set in conditions)
             sections.append((5, payload))
         payload = _u16(len(formatters))
-        for kind, arguments in formatters:
-            payload += bytes([kind, 0, len(arguments)])
+        for kind, arguments, flags in formatters:
+            payload += bytes([kind, flags, len(arguments)])
             for role, source, index in sorted(arguments):
                 payload += bytes([role, source]) + _u16(index)
         sections.append((6, payload))
@@ -964,7 +979,7 @@ class CalldataCompiler(object):
                            64 if any(step[0] == 2 for path in paths
                                      for step in path) else 0,
                            display_max_depth,
-                           1 if any(kind == 13 for kind, _ in formatters) else 0]),
+                           1 if any(f[0] == 13 for f in formatters) else 0]),
                     _u16(max([len(s) for s in strings] or [0]))]
         sections.append((9, b"".join(resource)))
 
@@ -988,6 +1003,9 @@ class CalldataCompiler(object):
 
 # Program header byte 6 (ERC7730_PROGRAM_FLAG_TRAILING_DATA).
 TRAILING_DATA = 1
+# Formatter entry byte 1 (ERC7730_FORMATTER_FLAG_*, firmware 7.17).
+FORMATTER_FLAG_RECIPIENT = 1
+FORMATTER_FLAG_TX_VALUE = 2
 
 
 # What the device executes: a mirror of keepkey-firmware's
@@ -1032,6 +1050,13 @@ DEVICE_CAPABILITIES = {
     # signer text shown inside a value's screen, and unit decimals
     "signer_text_max": 64,
     "unit_decimals_max": 77,
+    # formatter kind -> the flags it may carry (7.17): addressName RECIPIENT,
+    # amount TX_VALUE (calldata only)
+    "formatter_flags": {10: FORMATTER_FLAG_RECIPIENT,
+                        2: FORMATTER_FLAG_TX_VALUE},
+    # 7.17: an embedded call in an iteration may name one callee, value or
+    # authority (a scalar) for every element
+    "embedded_scalar_arguments": True,
 }
 # The verifier's table limits (erc7730_catalog.c).
 TABLE_LIMITS = {1: 96, 2: 64, 3: 64, 4: 64, 5: 32, 6: 64, 7: 64, 8: 64}
@@ -1263,10 +1288,15 @@ def device_refusal(program, capabilities=DEVICE_CAPABILITIES):
     for _ in range(u16(formatters, 0)):
         value_array, any_array, mixed_arrays, value_literal = (
             None, False, False, False)
-        kind, argc = formatters[at], formatters[at + 2]
+        kind, flags, argc = (formatters[at], formatters[at + 1],
+                             formatters[at + 2])
         at += 3
         if kind not in capabilities["formatters"]:
             return "formatter kind %d is not executed" % kind
+        if flags & ~capabilities.get("formatter_flags", {}).get(kind, 0):
+            return "formatter kind %d flags are not executed" % kind
+        if flags & FORMATTER_FLAG_TX_VALUE and not calldata:
+            return "a value check applies to calldata"
         roles, required = capabilities["formatters"][kind]
         seen = set()
         for _ in range(argc):
@@ -1307,7 +1337,9 @@ def device_refusal(program, capabilities=DEVICE_CAPABILITIES):
                     any_array = True
                 if role == 1:
                     value_array = argument_array
-                elif argument_array != value_array:
+                elif argument_array != value_array and not (
+                        kind == 13 and argument_array is None and
+                        capabilities.get("embedded_scalar_arguments")):
                     mixed_arrays = True
             seen.add(role)
         if not required <= seen:
