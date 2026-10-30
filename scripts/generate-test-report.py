@@ -2343,6 +2343,25 @@ SECTIONS = [
           'Sign TRX blind (raw_data)', 'Raw protobuf data triggers blind sign path. Shows amount + address if provided.', ['TRON blind sign']),
          ('T5', 'test_msg_tron_signtx', 'test_tron_sign_missing_fields_rejected',
           'Missing fields rejected', 'Incomplete transaction data is refused.', []),
+         ('T6', 'test_msg_tron_signtx', 'test_tron_usdt_unlimited_approve_names_spender',
+          'USDT unlimited approve (7.17)',
+          'Real mainnet approve(spender, 2^256-1) on USDT. AdvancedMode off: the device names the '
+          'full spender and says UNLIMITED, then the energy fee limit.',
+          ['UNLIMITED approval', 'Energy fee limit']),
+         ('T7', 'test_msg_tron_signtx', 'test_tron_usdt_approve_shows_amount',
+          'USDT approve with an amount (7.17)',
+          'Real mainnet approve of 100 USDT whose address word carries the 0x41 prefix. Spender and '
+          'amount are shown in USDT units.',
+          ['TRC-20 Approve', 'Energy fee limit']),
+         ('T8', 'test_msg_tron_signtx', 'test_tron_freeze_v2',
+          'Stake 2.0 freeze (7.17)',
+          'Real mainnet FreezeBalanceV2: amount in TRX and the resource (ENERGY).',
+          ['TRON Stake']),
+         ('T9', 'test_msg_tron_signtx', 'test_tron_vote_witness',
+          'Vote for SRs (7.17)',
+          'Real mainnet VoteWitness with three votes: a summary that it replaces current votes, '
+          'then one screen per SR with its full address and vote count.',
+          ['TRON Vote', 'Vote 1/3', 'Vote 2/3', 'Vote 3/3']),
      ]),
 
     ('N', 'TON', '7.14.0',
@@ -3757,6 +3776,11 @@ _TEST_MIN_VERSION = {
      'test_certified_soltoshi_join_untrusted_definition_shows_base_units'): '7.16.0',
     ('test_msg_solana_schema_v2',
      'test_certified_soltoshi_join_ignores_blind_sign_policy'): '7.16.0',
+    ('test_msg_tron_signtx',
+     'test_tron_usdt_unlimited_approve_names_spender'): '7.17.0',
+    ('test_msg_tron_signtx', 'test_tron_usdt_approve_shows_amount'): '7.17.0',
+    ('test_msg_tron_signtx', 'test_tron_freeze_v2'): '7.17.0',
+    ('test_msg_tron_signtx', 'test_tron_vote_witness'): '7.17.0',
 }
 
 # Intermediate release-stack trees deliberately omit controls that land in a
