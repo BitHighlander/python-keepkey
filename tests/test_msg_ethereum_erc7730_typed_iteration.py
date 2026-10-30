@@ -205,6 +205,9 @@ class TestMsgEthereumErc7730TypedIteration(Erc7730Harness,
         self.requires_fullFeature()
         self.requires_firmware("7.17.0")
         self.requires_release_capability("erc7730-runtime-review")
+        # Alpha builds of 7.17 before typed iteration report the same version
+        # and runtime capability; only this one tells them apart.
+        self.requires_release_capability("erc7730-typed-iteration")
         self.requires_structured_eip712()
         self.setup_mnemonic_abandon()
         self.client.apply_policy("AdvancedMode", 1)
@@ -328,14 +331,11 @@ class TestMsgEthereumErc7730TypedIteration(Erc7730Harness,
         self.assertEqual(self.screens[-1],
                          ("Signer field 2 of 2", ETH_TYPE))
 
-    def test_an_item_changed_in_a_later_walk_is_refused(self):
-        # Each item field is its own walk; every walk must hash the message
-        # the first one did. A host that pays the fee to itself only in the
-        # walk that shows it is refused before the fee recipient is shown.
+    def _walk_tampered(self, tampered, at_walk):
+        """Sign LISTING with its definition, answering walk `at_walk` from
+        `tampered`. Returns (response, screens shown, walks)."""
         envelope = self._preload(erc7730_compiler.compile_eip712(
             SEAPORT_DESCRIPTOR, LISTING))
-        tampered = copy.deepcopy(LISTING)
-        tampered["message"]["consideration"][1]["recipient"] = SELLER
         definition_id = hashlib.sha256(envelope).digest()
         shown = []
         walks = 0
@@ -359,11 +359,7 @@ class TestMsgEthereumErc7730TypedIteration(Erc7730Harness,
                 path = list(response.member_path)
                 if path == [1, 0]:
                     walks += 1
-                # Walk 1 is the offerer's; 2 counts the offer, 3-8 read its
-                # item; 9 counts the consideration, 10-16 read the first
-                # payment, 17-22 the second's type, id, amounts and tokens,
-                # and 23 its recipient.
-                doc = tampered if walks == 23 else LISTING
+                doc = tampered if walks == at_walk else LISTING
                 resolved = eip712_stream.resolve_member_path(doc, path)
                 response = self.client.call_raw(eth.EthereumTypedDataValueAck(
                     value=eip712_stream.encode_array_length(resolved[1])
@@ -371,6 +367,18 @@ class TestMsgEthereumErc7730TypedIteration(Erc7730Harness,
                     eip712_stream.encode_value(resolved[1], resolved[2])))
             else:
                 break
+        return response, shown, walks
+
+    def test_an_item_changed_in_a_later_walk_is_refused(self):
+        # Each item field is its own walk; every walk must hash the message
+        # the first one did. A host that pays the fee to itself only in the
+        # walk that shows it is refused before the fee recipient is shown.
+        tampered = copy.deepcopy(LISTING)
+        tampered["message"]["consideration"][1]["recipient"] = SELLER
+        # Walk 1 is the offerer's; 2 counts the offer, 3-8 read its item;
+        # 9 counts the consideration, 10-16 read the first payment, 17-22
+        # the second's type, id, amounts and tokens, and 23 its recipient.
+        response, shown, walks = self._walk_tampered(tampered, 23)
         self.assertIsInstance(response, proto.Failure)
         self.assertEqual(response.message,
                          "Certified EIP-712 value was not found")
@@ -378,3 +386,39 @@ class TestMsgEthereumErc7730TypedIteration(Erc7730Harness,
         bodies = "".join(text[1] for text in shown)
         self.assertNotIn("Paid to:\n" + OPENSEA_FEE, bodies)
         self.assertIn("Paid to:\n" + SELLER, bodies)
+
+    def test_a_count_changed_in_its_walk_is_refused(self):
+        # The count is not shown on a screen of its own: the "i of n" titles
+        # carry it. So the count must be the signed message's. A host that
+        # drops the fee from the walk that counts the consideration (9) would
+        # have the device show "1 of 1" and never the fee; that walk hashes
+        # another message, so it is refused before any payment is shown.
+        tampered = copy.deepcopy(LISTING)
+        del tampered["message"]["consideration"][1]
+        response, shown, walks = self._walk_tampered(tampered, 9)
+        self.assertIsInstance(response, proto.Failure)
+        self.assertEqual(response.message,
+                         "Certified EIP-712 value was not found")
+        self.assertEqual(walks, 9)
+        # No payment screen at all: neither a recipient nor an item type.
+        bodies = "".join(text[1] for text in shown)
+        self.assertNotIn("Paid to:", bodies)
+        self.assertNotIn("Native coin", bodies)
+
+    def test_a_payment_more_is_counted_on_every_payment_screen(self):
+        # Same listing, one more payment: every payment's title says "of 3",
+        # and the extra payment is shown like the others.
+        doc = copy.deepcopy(LISTING)
+        doc["message"]["consideration"].append(
+            _eth_item("1000000000000000", CREATOR))
+        self._sign(doc, SEAPORT_DESCRIPTOR)
+        self.assertEqual(
+            [(t, body) for t, body in self._fields() if t.endswith(" of 3")],
+            [("Signer field 1 of 3", body) for body in _eth_screens(
+                "0.5534078319 ETH", SELLER)] +
+            [("Signer field 2 of 3", body) for body in _eth_screens(
+                "0.0055899781 ETH", OPENSEA_FEE)] +
+            [("Signer field 3 of 3", body) for body in _eth_screens(
+                "0.001 ETH", CREATOR)])
+        self.assertEqual(
+            [t for t, _ in self._fields() if t.endswith(" of 2")], [])

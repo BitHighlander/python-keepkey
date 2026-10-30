@@ -614,6 +614,11 @@ def test_717_typed_data_iterates_one_array_like_calldata():
     # its amount with that element's token. The calldata iteration rules hold:
     # a field reading another array (or a scalar) inside it is refused.
     _requires_firmware("7.17.0")
+    # Alpha 7.17 builds before typed iteration report the same version.
+    reported = common.device_capabilities()
+    if reported is not None and "erc7730-typed-iteration" not in reported:
+        pytest.skip("Staged release tree does not yet provide capability: "
+                    "erc7730-typed-iteration")
     typed = {
         "types": {
             "EIP712Domain": [{"name": "chainId", "type": "uint256"},
