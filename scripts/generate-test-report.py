@@ -2854,18 +2854,19 @@ SECTIONS = [
          '  signature equal the run with no record.',
          '- A malformed record refuses the request, as every malformed record does.',
          '',
-         'The records are production records from ceremony batch 2 (Uniswap Universal Router on',
-         'Ethereum, a router on BNB Chain). The approve is the calldata swaps.pro sent through',
-         'Desktop on 2026-10-29. Each case signs the same request with and without the record and',
-         'requires the same signature.',
+         'The record names the Uniswap Universal Router on Ethereum and chains to the alpha root,',
+         'like every certified fixture here; the production ceremony records are checked by the',
+         'firmware unit tests under the compiled-in root. The approve is the calldata swaps.pro',
+         'sent through Desktop on 2026-10-29. Each case signs the same request with and without',
+         'the record and requires the same signature.',
      ],
      [
          ('AN1', 'test_msg_ethereum_approve_names',
           'test_vouched_spender_is_named_after_its_address',
           'A certified name follows the approve screen, which stays whole',
           'The same 25000 USDC approve to the Universal Router is signed without and with its '
-          'production name record. The named review is the unnamed one plus one screen, '
-          '"Spender: Uniswap Universal Router, named by KeepKey ClearSign FDD258EC, certified '
+          'name record. The named review is the unnamed one plus one screen, '
+          '"Spender: Uniswap Universal Router, named by KeepKey Alpha 716 A9531B9D, certified '
           'by KeepKey", right after the approve screen, which still shows the whole address on '
           'one page. The signatures are equal, and the next approve with no new record is the '
           'unnamed review again.',
@@ -2891,9 +2892,10 @@ SECTIONS = [
          ('AN4', 'test_msg_ethereum_approve_names',
           'test_name_for_another_chain_is_ignored',
           'A name for another chain names nothing',
-          'The BNB Chain record for a router address is loaded before an Ethereum approve to the '
-          'same address. The review and the signature equal the run with no record.',
-          ['Approve screen identical to the unnamed run']),
+          'The Ethereum record for the Universal Router is loaded before a BNB Chain send to the '
+          'same address. The review and the signature equal the run with no record. Control: '
+          'on Ethereum the same send is named.',
+          ['Send screen identical to the unnamed run']),
          ('AN5', 'test_msg_ethereum_approve_names',
           'test_malformed_name_record_refuses_the_approve',
           'A malformed record refuses, and does not linger',
