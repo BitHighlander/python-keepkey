@@ -2343,10 +2343,11 @@ class TestMsgEthereumErc7730Runtime(Erc7730Harness, common.KeepKeyTest):
             ("Inner field",
              "Module:\nTo 0x0000000000000000000000000000000000000000\nNo data")])
 
-    def test_717_safe_creation_module_is_a_delegatecall(self):
-        # setup() DELEGATECALLs a nonzero module, which then runs as the new
-        # Safe: a definition of the callee never describes that. Named and
-        # refused, though one is offered.
+    def test_717_safe_creation_with_safe_to_l2_setup_signs(self):
+        # Safe{Wallet}'s own creation: setup() DELEGATECALLs SafeToL2Setup
+        # .setupToL2(SafeL2 1.4.1), Safe's deployments pinned on chain 1. The
+        # device says what that does, calmly, and signs; it never asks for
+        # (or shows) a definition of the callee.
         self.requires_firmware("7.17.0")
         factory = self._program(self.CREATE_PROXY, "Create Safe", [
             {"path": "initializer", "label": "Account setup",
@@ -2359,15 +2360,31 @@ class TestMsgEthereumErc7730Runtime(Erc7730Harness, common.KeepKeyTest):
                               "Use L2 singleton", [
             {"path": "l2Singleton", "label": "L2 singleton",
              "format": "addressName"}], self.SAFE_TO_L2_SETUP)
-        result, _ = self._signed_with(factory, [setup, to_l2],
-                                      self.SAFE_CREATE_L2_SETUP_ARGS)
-        assert_failure(self, result, types.Failure_Other,
-                       "DELEGATECALL cannot be clear-signed")
+        result, baseline = self._signed_with(factory, [setup, to_l2],
+                                             self.SAFE_CREATE_L2_SETUP_ARGS)
+        self.assertEqual(result.signature_r, baseline.signature_r)
         self.assertEqual(self.depths, [1])
-        self.assertIn(self.DELEGATECALL, self._first_pages())
-        self.assertNotIn(("Inner action", "Use L2 singleton"),
-                         self._first_pages())
-        self.assertNotIn(types.ButtonRequest_SignTx, self.button_codes)
+        pages = self._first_pages()
+        self.assertIn(("Inner field",
+                       "Module:\nTo 0xBD89A1CE4DDe368FFAB0eC35506eEcE0b1fFdc54"
+                       "\nSafe's SafeToL2Setup: off Ethereum, your Safe runs "
+                       "Safe's SafeL2 0x29fcB43b46531BcA003ddC8FCB67FFE91900C762"),
+                      pages)
+        self.assertNotIn(self.DELEGATECALL, pages)
+        self.assertNotIn(("Inner action", "Use L2 singleton"), pages)
+
+        # One byte off (`to` at 208..227, the SafeL2 word's address at
+        # 596..615): no longer Safe's own module. Named and refused.
+        for at in (227, 615):
+            altered = bytearray(self.SAFE_CREATE_L2_SETUP_ARGS)
+            altered[at] ^= 1
+            result, _ = self._signed_with(factory, [setup, to_l2],
+                                          bytes(altered))
+            assert_failure(self, result, types.Failure_Other,
+                           "DELEGATECALL cannot be clear-signed")
+            self.assertEqual(self.depths, [1])
+            self.assertIn(self.DELEGATECALL, self._first_pages())
+            self.assertNotIn(types.ButtonRequest_SignTx, self.button_codes)
 
     def test_717_cow_order_sells_exactly_the_transaction_value(self):
         # TX_VALUE: the order's sell amount must be the transaction's value.
