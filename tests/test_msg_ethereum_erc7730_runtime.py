@@ -2120,6 +2120,33 @@ class TestMsgEthereumErc7730Runtime(Erc7730Harness, common.KeepKeyTest):
         "32c081090000000000000000000000003ef438c34ce51a697a24247fe033c456"
         "2c94f0fd00000000000000000000000000000000000000000000000000000000"
         "0000000000000000000000000000000000000000000000000000000000000000")
+    # Mainnet tx 0x08c3fb8c366cb80588b334e3c43bf4240dc7243160b96dff4d7b7f03c
+    # f8ff720: Safe{Wallet}'s 1.4.1 creation, whose setup() module call
+    # DELEGATECALLs SafeToL2Setup.setupToL2.
+    SAFE_CREATE_L2_SETUP_ARGS = bytes.fromhex(
+        "00000000000000000000000041675c099f32341bf84bfc5382af534df5c7461a"
+        "0000000000000000000000000000000000000000000000000000000000000060"
+        "0000000000000000000000000000000000000000000000000000000000000004"
+        "0000000000000000000000000000000000000000000000000000000000000204"
+        "b63e800d00000000000000000000000000000000000000000000000000000000"
+        "0000010000000000000000000000000000000000000000000000000000000000"
+        "00000002000000000000000000000000bd89a1ce4dde368ffab0ec35506eece0"
+        "b1ffdc5400000000000000000000000000000000000000000000000000000000"
+        "000001a0000000000000000000000000fd0732dc9e303f09fcef3a7388ad10a8"
+        "3459ec9900000000000000000000000000000000000000000000000000000000"
+        "0000000000000000000000000000000000000000000000000000000000000000"
+        "000000000000000000000000000000005afe7a11e70000000000000000000000"
+        "0000000000000000000000000000000000000000000000000000000000000000"
+        "00000004000000000000000000000000bf0bdf3801794d81a0253ec56f5be14b"
+        "d9e15fc6000000000000000000000000575b921289484c6db476cbc4ce49db30"
+        "572c3260000000000000000000000000bea6c4bc16257d416e5b5fcc49f35505"
+        "9cb52d5800000000000000000000000059f5fad60115845b3030774da2584d35"
+        "0bec5b0300000000000000000000000000000000000000000000000000000000"
+        "00000024fe51f64300000000000000000000000029fcb43b46531bca003ddc8f"
+        "cb67ffe91900c762000000000000000000000000000000000000000000000000"
+        "0000000000000000000000000000000000000000000000000000000000000000")
+    SAFE_141 = bytes.fromhex("41675c099f32341bf84bfc5382af534df5c7461a")
+    SAFE_TO_L2_SETUP = bytes.fromhex("bd89a1ce4dde368ffab0ec35506eece0b1ffdc54")
     # The swaps.pro request of 2026-10-29: CoW EthFlow createOrder selling
     # 10 ETH for USDC.
     COW_ORDER_ARGS = bytes.fromhex(
@@ -2301,6 +2328,32 @@ class TestMsgEthereumErc7730Runtime(Erc7730Harness, common.KeepKeyTest):
             ("Inner field", "Threshold:\n1"),
             ("Inner field",
              "Module:\nTo 0x0000000000000000000000000000000000000000\nNo data")])
+
+    def test_717_safe_creation_module_is_a_delegatecall(self):
+        # setup() DELEGATECALLs a nonzero module, which then runs as the new
+        # Safe: a definition of the callee never describes that. Named and
+        # refused, though one is offered.
+        self.requires_firmware("7.17.0")
+        factory = self._program(self.CREATE_PROXY, "Create Safe", [
+            {"path": "initializer", "label": "Account setup",
+             "format": "calldata", "params": {"calleePath": "_singleton"}}])
+        setup = self._program(self.SETUP, "Setup Safe", [
+            {"path": "_threshold", "label": "Threshold", "format": "raw"},
+            {"path": "data", "label": "Module", "format": "calldata",
+             "params": {"calleePath": "to"}}], self.SAFE_141)
+        to_l2 = self._program("setupToL2(address l2Singleton)",
+                              "Use L2 singleton", [
+            {"path": "l2Singleton", "label": "L2 singleton",
+             "format": "addressName"}], self.SAFE_TO_L2_SETUP)
+        result, _ = self._signed_with(factory, [setup, to_l2],
+                                      self.SAFE_CREATE_L2_SETUP_ARGS)
+        assert_failure(self, result, types.Failure_Other,
+                       "DELEGATECALL cannot be clear-signed")
+        self.assertEqual(self.depths, [1])
+        self.assertIn(self.DELEGATECALL, self._first_pages())
+        self.assertNotIn(("Inner action", "Use L2 singleton"),
+                         self._first_pages())
+        self.assertNotIn(types.ButtonRequest_SignTx, self.button_codes)
 
     def test_717_cow_order_sells_exactly_the_transaction_value(self):
         # TX_VALUE: the order's sell amount must be the transaction's value.
