@@ -3,9 +3,10 @@
 A certified typed-data definition walks the message once per field value it
 needs. Through 7.16 every one of those walks showed every leaf again, so the
 CoW order below took several times the screens of plain streaming. From 7.17
-the walks behind a definition hash every leaf but show only what the
-definition shows, plus the device's own warnings and any value too long for
-a field to hold, each in the first walk only.
+every message value is shown once: a value a definition field shows, in that
+field's format; the device's own warnings and any value too long for a field
+to hold, in the first walk; every other value, raw, in one last walk after
+the fields, in message order.
 
 The order is a real request: swaps.pro, CoW route, 25,000 USDC to ETH,
 captured 2026-10-29 (keepkey-vault docs/clearsign-case-studies/
@@ -23,7 +24,9 @@ import common
 from keepkeylib import eip712_stream, erc7730_compiler
 from keepkeylib import messages_ethereum_pb2 as eth
 from keepkeylib import messages_pb2 as proto
-from test_msg_ethereum_erc7730_runtime import Erc7730Harness
+from keepkeylib import types_pb2 as types
+from test_msg_ethereum_erc7730_runtime import (
+    ADDRESS, Erc7730Harness, assert_failure)
 
 PATH = [0x8000002C, 0x8000003C, 0x80000000, 0, 0]
 
@@ -90,6 +93,11 @@ COW_DESCRIPTOR = {"display": {"formats": {ORDER_FORMAT: {
         {"path": "feeAmount", "label": "Fee", "format": "tokenAmount",
          "params": {"tokenPath": "sellToken"}}]}}}}
 
+# The five Order values the definition does not show: raw, once, in order,
+# after its fields.
+COW_REST = ["appData", "kind", "partiallyFillable", "sellTokenBalance",
+            "buyTokenBalance"]
+
 # What the definition shows, each once, in order.
 COW_FIELDS = [
     ("Signer field", "Sell:\n25000 USDC"),
@@ -141,6 +149,27 @@ PERMIT_BATCH_DESCRIPTOR = {"display": {"formats": {"PermitBatch(": {
         {"path": "sigDeadline", "label": "Deadline", "format": "date",
          "params": {"encoding": "timestamp"}}]}}}}
 
+# Two values; the definition shows only the first.
+MAIL = {
+    "types": {
+        "EIP712Domain": [
+            {"name": "name", "type": "string"},
+            {"name": "chainId", "type": "uint256"},
+            {"name": "verifyingContract", "type": "address"}],
+        "Mail": [{"name": "first", "type": "uint256"},
+                 {"name": "second", "type": "uint256"}]},
+    "primaryType": "Mail",
+    "domain": {"name": "Audit app", "chainId": 1,
+               "verifyingContract": "0x" + ADDRESS.hex()},
+    "message": {"first": 42, "second": 7}}
+
+MAIL_FIRST_ONLY = {"display": {"formats": {
+    "Mail(uint256 first,uint256 second)": {
+        "intent": "Audit action",
+        "fields": [{"path": "first", "label": "First value",
+                    "format": "raw"}]}}}}
+
+
 class TestMsgEthereumErc7730TypedShowOnce(Erc7730Harness, common.KeepKeyTest):
     def setUp(self):
         super().setUp()
@@ -174,17 +203,22 @@ class TestMsgEthereumErc7730TypedShowOnce(Erc7730Harness, common.KeepKeyTest):
               % (streamed, certified, walks))
         pages = self._first_pages()
         titles = [title for title, _ in pages]
-        # Every leaf was walked and hashed once per field value: amounts and
-        # their tokens, the receiver, the date.
-        self.assertEqual(walks, 8)
-        # No message leaf screen in any of those walks: the four domain
-        # leaves, then the definition, each field once, then the signature.
+        # Every leaf was walked and hashed once per field value (amounts and
+        # their tokens, the receiver, the date), then once more for the
+        # values no field shows.
+        self.assertEqual(walks, 9)
+        # The four domain leaves, the definition, each field once, the five
+        # other values once, then the signature.
         self.assertEqual(
             [p for p in pages if p[0] == "Signer field"], COW_FIELDS)
         self.assertEqual(
             [t for t in titles if t not in ("Signer field",)],
             ["EIP-712 Domain"] * 4 + ["Runtime signer", "Unverified data",
-                                      "Contract action", "Sign Typed Data"])
+                                      "Contract action"] +
+            ["EIP-712 Message"] * 5 + ["Sign Typed Data"])
+        self.assertEqual(
+            [body.split("\n")[0] for title, body in pages
+             if title == "EIP-712 Message"], COW_REST)
         # The owner's ship rule: better than streaming.
         self.assertLess(certified, streamed)
 
@@ -234,7 +268,34 @@ class TestMsgEthereumErc7730TypedShowOnce(Erc7730Harness, common.KeepKeyTest):
 
     def test_an_unlimited_permit_is_warned_once_whatever_the_definition(self):
         _, _, walks = self._sign(PERMIT_BATCH, PERMIT_BATCH_DESCRIPTOR)
-        self.assertEqual(walks, 2)
+        # Two field walks, then the values the definition never shows.
+        self.assertEqual(walks, 3)
+        pages = self._first_pages()
         self.assertEqual(
-            [p for p in self._first_pages() if p[0] == "UNLIMITED approval"],
+            [p for p in pages if p[0] == "UNLIMITED approval"],
             [("UNLIMITED approval", "details[0].amount\nuint160: UNLIMITED")])
+        # The amount was shown as its warning; it is not shown again.
+        self.assertEqual(
+            [body.split("\n")[0] for title, body in pages
+             if title == "EIP-712 Message"],
+            ["details", "details[0].token", "details[0].expiration",
+             "details[0].nonce"])
+
+    def test_a_value_no_field_shows_is_shown_raw_once(self):
+        _, _, walks = self._sign(MAIL, MAIL_FIRST_ONLY)
+        self.assertEqual(walks, 2)  # the field's walk, then the rest
+        self.assertEqual(
+            [p for p in self._first_pages()
+             if p[0] in ("Signer field", "EIP-712 Message")],
+            [("Signer field", "First value:\n42"),
+             ("EIP-712 Message", "second\nuint256: 7")])
+
+    def test_declining_a_value_no_field_shows_aborts(self):
+        envelope = self._preload(
+            erc7730_compiler.compile_eip712(MAIL_FIRST_ONLY, MAIL))
+        result, _, _, _ = self._walk(
+            self._start(MAIL), envelope, MAIL, cancel_title="EIP-712 Message")
+        assert_failure(self, result, types.Failure_ActionCancelled,
+                       "EIP-712 cancelled")
+        self.assertEqual(self.screens[-1],
+                         ("EIP-712 Message", "second\nuint256: 7"))
