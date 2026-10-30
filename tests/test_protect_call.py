@@ -130,8 +130,9 @@ class TestProtectCall(common.KeepKeyTest):
             emu = boot_owned_emulator(self)
             if emu is None:
                 self.skipTest("no kkemu binary to power-cycle; set KK_EMULATOR_BIN")
+            shots = getattr(self.client, 'screenshot_dir', None)
             self.client.close()
-            self.client = emu.client(self._testMethodName)
+            self.client = emu.client(self._testMethodName, screenshot_dir=shots)
 
         self.setup_mnemonic_pin_passphrase()
         self.client.clear_session()
@@ -155,7 +156,8 @@ class TestProtectCall(common.KeepKeyTest):
                 self.client.close()
                 emu.halt()
                 emu.boot()
-                self.client = emu.client(self._testMethodName)
+                self.client = emu.client(self._testMethodName,
+                                         screenshot_dir=shots)
                 self.client.setup_debuglink(button=True, pin_correct=False)
             start = time.time()
             self.assertRaises(PinException, self._some_protected_call, False, True, False)

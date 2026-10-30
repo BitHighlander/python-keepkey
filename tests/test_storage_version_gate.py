@@ -578,12 +578,16 @@ class Emulator(object):
 
     # -- client -------------------------------------------------------------
 
-    def client(self, method, pin=None):
+    def client(self, method, pin=None, screenshot_dir=None):
         """Debuglink client bound to THIS emulator.
 
         Deliberately does not go through tests/config.py: that module picks
         HID/WebUSB when a real KeepKey is plugged in, which would send these
         wipes at somebody's hardware wallet.
+
+        A test from another module that moves onto an emulator it owns passes
+        the screenshot_dir its harness already chose, so its frames stay
+        filed under that test and not under storage_version_gate.
         """
         from keepkeylib.client import KeepKeyDebuglinkClient
         from keepkeylib.transport_udp import UDPTransport
@@ -591,7 +595,7 @@ class Emulator(object):
         c = KeepKeyDebuglinkClient(UDPTransport("127.0.0.1:%d" % self.port))
         c.set_debuglink(UDPTransport("127.0.0.1:%d" % (self.port + 1)))
         c.setup_debuglink(button=True, pin_correct=True)
-        _screenshots_to(c, method)
+        _screenshots_to(c, method, screenshot_dir)
         if pin:
             _teach_pin(c, pin)
         return c
@@ -698,7 +702,7 @@ def _teach_pin(client, pin):
     client.callback_PinMatrixRequest = cb
 
 
-def _screenshots_to(client, method):
+def _screenshots_to(client, method, d=None):
     """Point a fresh client at the per-test directory the report expects.
 
     Mirrors conftest.py's layout (SCREENSHOT_DIR/<module minus test_>/<method>),
@@ -712,8 +716,9 @@ def _screenshots_to(client, method):
     """
     if os.environ.get("KEEPKEY_SCREENSHOT") != "1":
         return
-    d = os.path.join(os.environ.get("SCREENSHOT_DIR", "screenshots"),
-                     "storage_version_gate", method)
+    if d is None:
+        d = os.path.join(os.environ.get("SCREENSHOT_DIR", "screenshots"),
+                         "storage_version_gate", method)
     if not os.path.isdir(d):
         os.makedirs(d)
     client.screenshot_dir = d
