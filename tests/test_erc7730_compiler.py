@@ -494,7 +494,11 @@ DEVICE_LIMITS = (
 # Phase E1 adds embedded calldata, shown under a blind-sign warning. The
 # strict formatter rule refuses 29 formerly accepted programs in this phase:
 # 1297 remain signable across the 1450 checked registry formats.
-REGISTRY_SIGNABLE = 1297
+# 7.17 runs embedded calls inside an iteration with one callee for every
+# element: the eight multicall(bytes[]) formats (Aave lpv3, Serenita
+# EthVault, Ekubo Positions, Orders, MEVCaptureRouter, Ve33Periphery,
+# Ve33Positions, VeToken): 1305.
+REGISTRY_SIGNABLE = 1305
 
 
 def test_official_registry_all_calldata_formats_reach_firmware():
@@ -742,3 +746,78 @@ def test_encode_type_finds_struct_dependency_through_every_array_dimension():
     }
     assert eip712_encode_type("Group", types) == (
         "Group(Person[2][][4] people)Person(string name)")
+
+
+def test_717_embedded_call_in_an_iteration_may_name_one_callee():
+    # multicall(bytes[]): every element calls the contract itself (@.to).
+    # The callee is one value for every element, not a second array.
+    _requires_firmware("7.17.0")
+    signature = "multicall(bytes[] data)"
+    address = "0x" + "11" * 20
+    for callee, refusal in (
+            ("@.to", None),
+            ("calls", "a field reads another array than its iteration")):
+        sig = signature if callee == "@.to" else (
+            "multicall(bytes[] data,address[] calls)")
+        descriptor = {"display": {"formats": {sig: {
+            "intent": "Multicall", "fields": [{
+                "path": "data.[]", "label": "Call", "format": "calldata",
+                "params": {"calleePath": callee if callee == "@.to"
+                           else "calls.[]"}}]}}}}
+        program = _unchecked(compile_calldata, descriptor, sig, 1, address)
+        # A parallel callee array stays refused (D10); only a scalar is new.
+        _firmware_validate(program, refusal)
+    # Another formatter still may not read a scalar inside an iteration.
+    descriptor = {"display": {"formats": {
+        "batch(uint256[] amounts,address token)": {
+            "intent": "Batch", "fields": [{
+                "path": "amounts.[]", "label": "Amount",
+                "format": "tokenAmount", "params": {"tokenPath": "token"}}]}}}}
+    _firmware_validate(_unchecked(
+        compile_calldata, descriptor,
+        "batch(uint256[] amounts,address token)", 1, address),
+        "a field reads another array than its iteration")
+
+
+def test_717_constraint_flags_are_formatter_byte_1():
+    # "recipient" (addressName) and "equalsTxValue" (amount, calldata only)
+    # set formatter flags RECIPIENT (1) and TX_VALUE (2); the device refuses
+    # any other flag on any other formatter, as the mirror does.
+    _requires_firmware("7.17.0")
+    signature = "order(address receiver,uint256 sell)"
+    address = "0x" + "11" * 20
+    descriptor = {"display": {"formats": {signature: {
+        "intent": "Order", "fields": [
+            {"path": "receiver", "label": "Receiver", "format": "addressName",
+             "params": {"recipient": True}},
+            {"path": "sell", "label": "Sell", "format": "amount",
+             "params": {"equalsTxValue": True}}]}}}}
+    program = compile_calldata(descriptor, signature, 1, address)
+    _firmware_validate(program)
+    formatters = _sections(program)[6]
+    assert formatters[2:5] == bytes([10, 1, 1])
+    assert formatters[9:12] == bytes([2, 2, 1])
+    # Swap the flags: RECIPIENT on an amount, TX_VALUE on an addressName.
+    swapped = bytearray(program)
+    at = program.index(formatters)
+    swapped[at + 3], swapped[at + 10] = 2, 1
+    _firmware_validate(bytes(swapped),
+                       "formatter kind 10 flags are not executed")
+    for bad in ({"path": "receiver", "label": "R", "format": "raw",
+                 "params": {"recipient": True}},
+                {"path": "sell", "label": "S", "format": "raw",
+                 "params": {"equalsTxValue": True}}):
+        with pytest.raises(ValueError):
+            compile_calldata({"display": {"formats": {signature: {
+                "intent": "Order", "fields": [bad]}}}}, signature, 1, address)
+    typed = {
+        "types": {"EIP712Domain": [{"name": "chainId", "type": "uint256"}],
+                  "Mail": [{"name": "a", "type": "uint256"}]},
+        "primaryType": "Mail", "domain": {"chainId": 1},
+        "message": {"a": 1}}
+    with pytest.raises(ValueError, match="equalsTxValue"):
+        compile_eip712({"display": {"formats": {"Mail(uint256 a)": {
+            "intent": "Mail", "fields": [
+                {"path": "a", "label": "A", "format": "amount",
+                 "params": {"equalsTxValue": True}}]}}}}, typed,
+            address=address)

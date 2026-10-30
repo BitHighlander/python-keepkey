@@ -174,6 +174,17 @@ class Erc7730Harness(object):
         self.fail("protocol did not terminate")
 
 
+class Recording(erc7730.Catalog):
+    """A catalog that records the depth of every inner lookup."""
+    depths = None
+
+    def chunk(self, request):
+        if request.HasField("recursion_depth") and self.depths is not None:
+            if request.offset == 0:
+                self.depths.append(request.recursion_depth)
+        return erc7730.Catalog.chunk(self, request)
+
+
 class TestMsgEthereumErc7730Runtime(Erc7730Harness, common.KeepKeyTest):
     def setUp(self):
         super().setUp()
@@ -2060,3 +2071,317 @@ class TestMsgEthereumErc7730Runtime(Erc7730Harness, common.KeepKeyTest):
                     self._word(OTHER_ADDRESS) + self._word(amount) + self._word(fee)),
                 ["Recipient:\n0x" + OTHER_ADDRESS.hex(),
                  "Amount:\n" + str(amount), "Fee:\n" + str(fee)])
+
+    # 7.17 (D-020): embedded calls nested two levels below the transaction
+    # and inside iterations, an embedded call with no data, and the RECIPIENT
+    # and TX_VALUE constraints, over real calldata. Each signs the same
+    # transaction on the ordinary path first and requires the same signature.
+    # The arguments of mainnet tx 0x27ee4abbee000e5c7d26d11ea41d826756e57540
+    # 977ec423c900e34bd13f480c: SwapRouter02 multicall(deadline,
+    # [exactInput, unwrapWETH9]).
+    ROUTER02_MULTICALL_ARGS = bytes.fromhex(
+        "000000000000000000000000000000000000000000000000000000006ae3d83c"
+        "0000000000000000000000000000000000000000000000000000000000000040"
+        "0000000000000000000000000000000000000000000000000000000000000002"
+        "0000000000000000000000000000000000000000000000000000000000000040"
+        "00000000000000000000000000000000000000000000000000000000000001a0"
+        "0000000000000000000000000000000000000000000000000000000000000124"
+        "b858183f00000000000000000000000000000000000000000000000000000000"
+        "0000002000000000000000000000000000000000000000000000000000000000"
+        "0000008000000000000000000000000000000000000000000000000000000000"
+        "000000020000000000000000000000000000000000000000000001e90a8d027c"
+        "9ee99999000000000000000000000000000000000000000000000000340c6aa0"
+        "af5469e800000000000000000000000000000000000000000000000000000000"
+        "000000424c9edd5852cd905f086c759e8383e09bff1e68b3000064a0b86991c6"
+        "218b36c1d19d4a2e9eb0ce3606eb480001f4c02aaa39b223fe8d0a0e5c4f27ea"
+        "d9083c756cc20000000000000000000000000000000000000000000000000000"
+        "0000000000000000000000000000000000000000000000000000000000000000"
+        "0000000000000000000000000000000000000000000000000000000000000044"
+        "49404b7c000000000000000000000000000000000000000000000000340c6aa0"
+        "af5469e8000000000000000000000000b3ddec0ccc5c3ba733fcdf5a15f98c95"
+        "ec5a5fdb00000000000000000000000000000000000000000000000000000000")
+    # Mainnet tx 0x8f5df072258c8b3a1dbeb89d61df6e6be3a997a3f2b167614ad03a416
+    # cf9400f: SafeProxyFactory 1.4.1 createProxyWithNonce of a 1-of-2 Safe.
+    SAFE_CREATE_ARGS = bytes.fromhex(
+        "00000000000000000000000029fcb43b46531bca003ddc8fcb67ffe91900c762"
+        "0000000000000000000000000000000000000000000000000000000000000060"
+        "87818588a63dc1031b9d46b1ba35b204eff451a125dd8cc312e8f32f956a1736"
+        "0000000000000000000000000000000000000000000000000000000000000184"
+        "b63e800d00000000000000000000000000000000000000000000000000000000"
+        "0000010000000000000000000000000000000000000000000000000000000000"
+        "0000000100000000000000000000000000000000000000000000000000000000"
+        "0000000000000000000000000000000000000000000000000000000000000000"
+        "00000160000000000000000000000000fd0732dc9e303f09fcef3a7388ad10a8"
+        "3459ec9900000000000000000000000000000000000000000000000000000000"
+        "0000000000000000000000000000000000000000000000000000000000000000"
+        "0000000000000000000000000000000000000000000000000000000000000000"
+        "0000000000000000000000000000000000000000000000000000000000000000"
+        "00000002000000000000000000000000e4f420a0786451a10bf2fd4702e9b766"
+        "32c081090000000000000000000000003ef438c34ce51a697a24247fe033c456"
+        "2c94f0fd00000000000000000000000000000000000000000000000000000000"
+        "0000000000000000000000000000000000000000000000000000000000000000")
+    # Mainnet tx 0x08c3fb8c366cb80588b334e3c43bf4240dc7243160b96dff4d7b7f03c
+    # f8ff720: Safe{Wallet}'s 1.4.1 creation, whose setup() module call
+    # DELEGATECALLs SafeToL2Setup.setupToL2.
+    SAFE_CREATE_L2_SETUP_ARGS = bytes.fromhex(
+        "00000000000000000000000041675c099f32341bf84bfc5382af534df5c7461a"
+        "0000000000000000000000000000000000000000000000000000000000000060"
+        "0000000000000000000000000000000000000000000000000000000000000004"
+        "0000000000000000000000000000000000000000000000000000000000000204"
+        "b63e800d00000000000000000000000000000000000000000000000000000000"
+        "0000010000000000000000000000000000000000000000000000000000000000"
+        "00000002000000000000000000000000bd89a1ce4dde368ffab0ec35506eece0"
+        "b1ffdc5400000000000000000000000000000000000000000000000000000000"
+        "000001a0000000000000000000000000fd0732dc9e303f09fcef3a7388ad10a8"
+        "3459ec9900000000000000000000000000000000000000000000000000000000"
+        "0000000000000000000000000000000000000000000000000000000000000000"
+        "000000000000000000000000000000005afe7a11e70000000000000000000000"
+        "0000000000000000000000000000000000000000000000000000000000000000"
+        "00000004000000000000000000000000bf0bdf3801794d81a0253ec56f5be14b"
+        "d9e15fc6000000000000000000000000575b921289484c6db476cbc4ce49db30"
+        "572c3260000000000000000000000000bea6c4bc16257d416e5b5fcc49f35505"
+        "9cb52d5800000000000000000000000059f5fad60115845b3030774da2584d35"
+        "0bec5b0300000000000000000000000000000000000000000000000000000000"
+        "00000024fe51f64300000000000000000000000029fcb43b46531bca003ddc8f"
+        "cb67ffe91900c762000000000000000000000000000000000000000000000000"
+        "0000000000000000000000000000000000000000000000000000000000000000")
+    SAFE_141 = bytes.fromhex("41675c099f32341bf84bfc5382af534df5c7461a")
+    SAFE_TO_L2_SETUP = bytes.fromhex("bd89a1ce4dde368ffab0ec35506eece0b1ffdc54")
+    # The swaps.pro request of 2026-10-29: CoW EthFlow createOrder selling
+    # 10 ETH for USDC.
+    COW_ORDER_ARGS = bytes.fromhex(
+        "000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+        "0000000000000000000000009858effd232b4033e47d90003d41ec34ecaeda94"
+        "0000000000000000000000000000000000000000000000008ac7230489e80000"
+        "000000000000000000000000000000000000000000000000000000055f39e075"
+        "048680e79dfa12d06c2362b19faa34b7c754a3ed153d204656c48f82e84d4e60"
+        "0000000000000000000000000000000000000000000000000000000000000000"
+        "000000000000000000000000000000000000000000000000000000006ae3c1e0"
+        "0000000000000000000000000000000000000000000000000000000000000000"
+        "000000000000000000000000000000000000000000000000000000009f9f3f72")
+    ROUTER02 = bytes.fromhex("68b3465833fb72a70ecdf485e0e4c7bd8665fc45")
+    SAFE_L2 = bytes.fromhex("29fcb43b46531bca003ddc8fcb67ffe91900c762")
+    MULTICALL = "multicall(uint256 deadline,bytes[] data)"
+    EXACT_INPUT = ("exactInput((bytes path,address recipient,uint256 amountIn,"
+                   "uint256 amountOutMinimum) params)")
+    UNWRAP = "unwrapWETH9(uint256 amountMinimum,address recipient)"
+    CREATE_PROXY = ("createProxyWithNonce(address _singleton,bytes initializer,"
+                    "uint256 saltNonce)")
+    SETUP = ("setup(address[] _owners,uint256 _threshold,address to,bytes data,"
+             "address fallbackHandler,address paymentToken,uint256 payment,"
+             "address paymentReceiver)")
+    CREATE_ORDER = ("createOrder((address buyToken,address receiver,"
+                    "uint256 sellAmount,uint256 buyAmount,bytes32 appData,"
+                    "uint256 feeAmount,uint32 validTo,bool partiallyFillable,"
+                    "int64 quoteId) order)")
+
+    def _program(self, signature, intent, fields, address=ADDRESS):
+        return erc7730_compiler.compile_calldata(
+            {"display": {"formats": {signature: {
+                "intent": intent, "fields": fields}}}},
+            signature, 1, address)
+
+    def _router02(self, address):
+        """The multicall and its two steps, all at `address`."""
+        outer = self._program(self.MULTICALL, "Swap", [
+            {"path": "deadline", "label": "Deadline", "format": "date",
+             "params": {"encoding": "timestamp"}},
+            {"path": "data.[]", "label": "Step", "format": "calldata",
+             "params": {"calleePath": "@.to", "amountPath": "@.value",
+                        "spenderPath": "@.from"}}], address)
+        steps = [self._program(self.EXACT_INPUT, "Swap exact input", [
+            {"path": "params.recipient", "label": "Recipient",
+             "format": "addressName"},
+            {"path": "params.amountOutMinimum", "label": "Minimum out",
+             "format": "raw"}], address),
+                 self._program(self.UNWRAP, "Unwrap WETH", [
+            {"path": "amountMinimum", "label": "Minimum", "format": "amount"},
+            {"path": "recipient", "label": "Recipient",
+             "format": "addressName", "params": {"recipient": True}}],
+                     address)]
+        return outer, steps
+
+    def _signed_with(self, outer, inner, arguments, value=b""):
+        self._load_signer()
+        outer_def = self._definition(outer, self._envelope(outer))
+        catalog = Recording([outer_def] + [
+            self._exec_inner_catalog(program) for program in inner])
+
+        def preload():
+            erc7730.preload(self.client, outer_def)
+            self._drop_setup_screenshots()
+            return b""
+        start = self._audit_start(outer, 4 + len(arguments))
+        start.value = value
+        baseline, _, _, _ = self._walk(start, arguments=arguments)
+        self.assertTrue(baseline.HasField("signature_r"))
+        preload()
+        catalog.depths = []
+        result, _, _, _ = self._walk(start, arguments=arguments,
+                                     catalog=catalog)
+        self.depths = catalog.depths
+        return result, baseline
+
+    def _shown(self):
+        """The review's own screens, numbered titles included."""
+        return [s for s in self._first_pages() if s[0] in (
+            "Contract action", "Inner action") or s[0].startswith(
+                ("Signer field", "Inner field"))]
+
+    def test_717_every_multicall_step_is_clear_signed(self):
+        self.requires_firmware("7.17.0")
+        outer, steps = self._router02(ADDRESS)
+        result, baseline = self._signed_with(outer, steps,
+                                             self.ROUTER02_MULTICALL_ARGS)
+        self.assertEqual((result.signature_r, result.signature_s),
+                         (baseline.signature_r, baseline.signature_s))
+        self.assertEqual(self.depths, [1, 1])
+        shown = [s for s in self._shown()
+                 if s[0] not in ("Runtime signer", "Inner signer")]
+        self.assertEqual([s[0] for s in shown], [
+            "Contract action", "Signer field", "Signer field 1 of 2",
+            "Inner action", "Inner field", "Inner field",
+            "Signer field 2 of 2", "Inner action", "Inner field",
+            "Inner field"])
+        self.assertEqual(shown[1][1],
+                         "Deadline:\n2026-10-29 23:35:24 UTC\n(1793316924)")
+        self.assertTrue(shown[2][1].startswith(
+            "Step:\nTo 0x" + ADDRESS.hex() + "\nFunction 0xb858183f\n"
+            "Data 292 bytes\nValue 0 Wei\nAs 0x"), shown[2][1])
+        self.assertEqual(shown[5][1], "Minimum out:\n3750489828061637096")
+        self.assertTrue(shown[6][1].startswith(
+            "Step:\nTo 0x" + ADDRESS.hex() + "\nFunction 0x49404b7c\n"
+            "Data 68 bytes"), shown[6][1])
+        self.assertEqual(shown[8][1], "Minimum:\n3.750489828061637096 ETH")
+        # RECIPIENT: the ETH goes to the capture's account, not this wallet.
+        self.assertEqual(shown[9][1],
+                         "Recipient:\n0xB3ddeC0cCC5C3ba733FCdf5a15f98c95Ec5a5FdB"
+                         "\nNOT this wallet")
+
+    def _exec_of(self, to, data, operation=0):
+        padded = data + bytes(-len(data) % 32)
+        return (self._word(to) + self._word(0) + self._word(128) +
+                self._word(operation) + self._word(len(data)) + padded)
+
+    def test_717_calls_nest_two_levels_and_no_deeper(self):
+        # A Safe executing the real multicall, whose steps are level 2. A
+        # Safe executing a second Safe executing it is refused at level 3,
+        # which is never asked for.
+        self.requires_firmware("7.17.0")
+        from keepkeylib.signed_metadata import keccak256
+        selector = keccak256(b"execTransaction(address,uint256,bytes,uint8)")[:4]
+        multicall = keccak256(b"multicall(uint256,bytes[])")[:4]
+        second = bytes.fromhex("55" * 20)
+        exec_fields = [
+            {"path": "data", "label": "Transaction", "format": "calldata",
+             "params": {"calleePath": "to", "amountPath": "value",
+                        "spenderPath": "@.to"}},
+            {"path": "operation", "label": "Operation", "format": "raw"}]
+        outer = self._program(self.EXEC, "sign multisig operation",
+                              exec_fields)
+        middle = self._program(self.EXEC, "sign multisig operation",
+                               exec_fields, second)
+        router, steps = self._router02(self.ROUTER02)
+        call = multicall + self.ROUTER02_MULTICALL_ARGS
+        result, baseline = self._signed_with(
+            outer, [router] + steps, self._exec_of(self.ROUTER02, call))
+        self.assertEqual(result.signature_r, baseline.signature_r)
+        self.assertEqual(self.depths, [1, 2, 2])
+        shown = [s for s in self._shown()
+                 if s[0] not in ("Runtime signer", "Inner signer")]
+        self.assertIn(("Inner field", "Minimum:\n3.750489828061637096 ETH"),
+                      shown)
+        self.assertEqual(shown[-1], ("Signer field", "Operation:\n0"))
+        self._load_signer()
+        deeper = self._exec_of(second, selector + self._exec_of(
+            self.ROUTER02, call))
+        result, _ = self._signed_with(outer, [middle, router] + steps, deeper)
+        assert_failure(self, result, types.Failure_Other,
+                       "Inner call cannot be clear-signed")
+        self.assertEqual(self.depths, [1, 2])
+        self.assertNotIn(types.ButtonRequest_SignTx, self.button_codes)
+
+    def test_717_safe_creation_shows_owners_and_no_module(self):
+        # The registry's createProxyWithNonce and setup() formats over the
+        # real creation: setup() embeds (to, data) = (0, empty), which calls
+        # nothing; the device says so instead of refusing the creation.
+        self.requires_firmware("7.17.0")
+        factory = self._program(self.CREATE_PROXY, "Create Safe", [
+            {"path": "_singleton", "label": "Safe singleton",
+             "format": "addressName"},
+            {"path": "initializer", "label": "Account setup",
+             "format": "calldata", "params": {"calleePath": "_singleton"}}])
+        setup = self._program(self.SETUP, "Setup Safe", [
+            {"path": "_owners.[]", "label": "Signer", "format": "addressName"},
+            {"path": "_threshold", "label": "Threshold", "format": "raw"},
+            {"path": "data", "label": "Module", "format": "calldata",
+             "params": {"calleePath": "to"}}], self.SAFE_L2)
+        result, baseline = self._signed_with(factory, [setup],
+                                             self.SAFE_CREATE_ARGS)
+        self.assertEqual(result.signature_r, baseline.signature_r)
+        inner = [s for s in self._shown() if s[0].startswith("Inner field")]
+        self.assertEqual(inner, [
+            ("Inner field 1 of 2",
+             "Signer:\n0xe4f420A0786451a10bf2Fd4702E9b76632c08109"),
+            ("Inner field 2 of 2",
+             "Signer:\n0x3Ef438C34cE51A697a24247fe033C4562C94F0Fd"),
+            ("Inner field", "Threshold:\n1"),
+            ("Inner field",
+             "Module:\nTo 0x0000000000000000000000000000000000000000\nNo data")])
+
+    def test_717_safe_creation_module_is_a_delegatecall(self):
+        # setup() DELEGATECALLs a nonzero module, which then runs as the new
+        # Safe: a definition of the callee never describes that. Named and
+        # refused, though one is offered.
+        self.requires_firmware("7.17.0")
+        factory = self._program(self.CREATE_PROXY, "Create Safe", [
+            {"path": "initializer", "label": "Account setup",
+             "format": "calldata", "params": {"calleePath": "_singleton"}}])
+        setup = self._program(self.SETUP, "Setup Safe", [
+            {"path": "_threshold", "label": "Threshold", "format": "raw"},
+            {"path": "data", "label": "Module", "format": "calldata",
+             "params": {"calleePath": "to"}}], self.SAFE_141)
+        to_l2 = self._program("setupToL2(address l2Singleton)",
+                              "Use L2 singleton", [
+            {"path": "l2Singleton", "label": "L2 singleton",
+             "format": "addressName"}], self.SAFE_TO_L2_SETUP)
+        result, _ = self._signed_with(factory, [setup, to_l2],
+                                      self.SAFE_CREATE_L2_SETUP_ARGS)
+        assert_failure(self, result, types.Failure_Other,
+                       "DELEGATECALL cannot be clear-signed")
+        self.assertEqual(self.depths, [1])
+        self.assertIn(self.DELEGATECALL, self._first_pages())
+        self.assertNotIn(("Inner action", "Use L2 singleton"),
+                         self._first_pages())
+        self.assertNotIn(types.ButtonRequest_SignTx, self.button_codes)
+
+    def test_717_cow_order_sells_exactly_the_transaction_value(self):
+        # TX_VALUE: the order's sell amount must be the transaction's value.
+        # On the runtime tier the ordinary Send screen stays.
+        self.requires_firmware("7.17.0")
+        order = self._program(self.CREATE_ORDER, "Sell ETH", [
+            {"path": "order.sellAmount", "label": "Sell", "format": "amount",
+             "params": {"equalsTxValue": True}},
+            {"path": "order.receiver", "label": "Receiver",
+             "format": "addressName", "params": {"recipient": True}},
+            {"path": "order.validTo", "label": "Valid until", "format": "date",
+             "params": {"encoding": "timestamp"}}])
+        ten = (10 * 10 ** 18).to_bytes(8, "big")
+        result, baseline = self._signed_with(order, [], self.COW_ORDER_ARGS,
+                                             value=ten)
+        self.assertEqual(result.signature_r, baseline.signature_r)
+        self.assertEqual(
+            [s for s in self._shown() if s[0] == "Signer field"], [
+                ("Signer field", "Sell:\n10 ETH"),
+                ("Signer field",
+                 "Receiver:\n0x9858EfFD232B4033E47d90003D41EC34EcaEda94\n"
+                 "NOT this wallet"),
+                ("Signer field",
+                 "Valid until:\n2026-10-29 22:00:00 UTC\n(1793311200)")])
+        self.assertIn("Send", [s[0] for s in self.screens])
+        self._load_signer()
+        result, _ = self._signed_with(order, [], self.COW_ORDER_ARGS,
+                                      value=ten[:-1] + b"\x01")
+        assert_failure(self, result, types.Failure_SyntaxError,
+                       "ERC-7730 value does not match the call")
+        self.assertNotIn(types.ButtonRequest_SignTx, self.button_codes)
