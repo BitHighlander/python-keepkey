@@ -1015,7 +1015,8 @@ FORMATTER_FLAG_TX_VALUE = 2
 _PATH, _LITERAL, _STRING = frozenset((1,)), frozenset((2,)), frozenset((3,))
 DEVICE_CAPABILITIES = {
     # 2 and 3 (interpolated intent) only as one run directly after the intent;
-    # 5/6 groups; 7/8 one iteration at a time, calldata only
+    # 5/6 groups; 7/8 one iteration at a time (typed data too: see
+    # "typed_iteration")
     "display_opcodes": frozenset((1, 2, 3, 4, 5, 6, 7, 8, 10)),
     # formatter kind -> (argument role -> permitted sources, required roles)
     "formatters": {
@@ -1057,6 +1058,9 @@ DEVICE_CAPABILITIES = {
     # 7.17: an embedded call in an iteration may name one callee, value or
     # authority (a scalar) for every element
     "embedded_scalar_arguments": True,
+    # 7.17: typed data iterates one array at a time too (Seaport's offer[]
+    # and consideration[]), counted from the length the stream sends
+    "typed_iteration": True,
 }
 # The verifier's table limits (erc7730_catalog.c).
 TABLE_LIMITS = {1: 96, 2: 64, 3: 64, 4: 64, 5: 32, 6: 64, 7: 64, 8: 64}
@@ -1367,7 +1371,8 @@ def device_refusal(program, capabilities=DEVICE_CAPABILITIES):
         if opcode == 4 and c != ABSENT and not capabilities["conditions"]:
             return "display conditions are not executed"
         if opcode == 7:
-            if a not in iterable or iteration is not None or not calldata:
+            if a not in iterable or iteration is not None or not (
+                    calldata or capabilities.get("typed_iteration")):
                 return "iteration is not executed here"
             iteration = path_arrays[a]
         elif opcode == 8:

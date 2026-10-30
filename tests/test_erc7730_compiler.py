@@ -13,7 +13,8 @@ import semver
 import common
 
 from keepkeylib.erc7730_compiler import (
-    HEADER_SIZE, DeviceCannotExecute, compile_calldata, compile_eip712,
+    DEVICE_CAPABILITIES, HEADER_SIZE, DeviceCannotExecute, compile_calldata,
+    compile_eip712,
     device_refusal, eip712_encode_type, load_descriptor,
     parse_function_signature,
 )
@@ -606,6 +607,52 @@ def test_typed_data_reads_only_its_to_container():
                      "format": "addressName"}]}}}}
         program = _unchecked(compile_eip712, descriptor, typed)
         _firmware_validate(program, refusal)
+
+
+def test_717_typed_data_iterates_one_array_like_calldata():
+    # Seaport's OrderComponents: each offer item is shown once per element,
+    # its amount with that element's token. The calldata iteration rules hold:
+    # a field reading another array (or a scalar) inside it is refused.
+    _requires_firmware("7.17.0")
+    typed = {
+        "types": {
+            "EIP712Domain": [{"name": "chainId", "type": "uint256"},
+                             {"name": "verifyingContract", "type": "address"}],
+            "Item": [{"name": "token", "type": "address"},
+                     {"name": "amount", "type": "uint256"}],
+            "Order": [{"name": "offer", "type": "Item[]"},
+                      {"name": "other", "type": "Item[]"},
+                      {"name": "fallback", "type": "address"}]},
+        "primaryType": "Order",
+        "domain": {"chainId": 1, "verifyingContract": "0x" + "11" * 20},
+        "message": {"offer": [{"token": "0x" + "22" * 20, "amount": 1}],
+                    "other": [], "fallback": "0x" + "33" * 20}}
+    for token_path, refusal in (
+            ("token", None),
+            ("#.other.[].token",
+             "a field reads another array than its iteration"),
+            ("#.fallback", "a field reads another array than its iteration")):
+        descriptor = {"display": {"formats": {"Order(": {
+            "intent": "Order", "fields": [{
+                "path": "offer.[]", "label": "Item", "fields": [
+                    {"path": "amount", "label": "Amount",
+                     "format": "tokenAmount",
+                     "params": {"tokenPath": token_path}}]}]}}}}
+        program = _unchecked(compile_eip712, descriptor, typed)
+        sections = _sections(program)
+        display = sections[7]
+        count = int.from_bytes(display[:2], "big")
+        assert [display[2 + i * 8] for i in range(count)] == [
+            1, 7, 5, 4, 6, 8, 10]
+        _firmware_validate(program, refusal)
+    # A device without typed iteration refuses the same program.
+    capabilities = dict(DEVICE_CAPABILITIES)
+    del capabilities["typed_iteration"]
+    descriptor = {"display": {"formats": {"Order(": {
+        "intent": "Order", "fields": [{
+            "path": "offer.[].amount", "label": "Amount", "format": "raw"}]}}}}
+    assert device_refusal(_unchecked(compile_eip712, descriptor, typed),
+                          capabilities) == "iteration is not executed here"
 
 
 def test_trailing_data_flag_is_header_byte_6_for_calldata_only():
