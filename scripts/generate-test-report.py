@@ -1298,6 +1298,12 @@ SECTIONS = [
           'Sign ETH transfer',
           'Simple value transfer with no contract data. Device shows recipient + amount + gas.',
           ['ETH send confirmation']),
+         ('E2b', 'test_msg_ethereum_signtx', 'test_ethereum_unichain_amounts_read_eth',
+          'Unichain amounts in ETH (7.17)',
+          'A 1.5 ETH send on Unichain (chain 130). The value and the fee read ETH, as on '
+          'Optimism, Base and Arbitrum, instead of a fee in Wei, and the last screen is titled '
+          '"Tx on Unichain".',
+          ['Unichain fee in ETH']),
          ('E3', 'test_msg_ethereum_signtx', 'test_ethereum_signtx_data',
           'Sign ETH tx with contract data',
           'Transaction with data field (contract call). Device shows data as hex since it cannot '
@@ -3587,6 +3593,11 @@ SECTIONS = [
           'Native-currency aliases disclose the signer mapping and token address',
           "An address in the signer's alias set is marked as a signer native alias and shown in full before the native-unit amount; any other address stays an unknown token. The firmware token table wins over an alias.",
           ['Signer alias, token address and native-unit amount']),
+         ('EX8b', 'test_msg_ethereum_erc7730_runtime',
+          'test_native_placeholder_alias_reads_as_the_native_coin',
+          'The zero address aliased native reads as the coin (7.17)',
+          "When the signer's alias set names the zero address native (a Safe's gas token), the amount reads '10 ETH' with no signer-mapping note. Not aliased, the zero address stays an unknown token.",
+          ['Zero-address alias shown as 10 ETH']),
          ('EX9', 'test_msg_ethereum_erc7730_runtime',
           'test_address_name_marks_only_the_signing_account',
           '"(this wallet)" marks only the signing account',
@@ -3836,7 +3847,13 @@ SECTIONS = [
        'Disables AdvancedMode, walks the canonical Mail document, and requires a typed-data '
        'signature with the independently published domain and message hashes. This exercises '
        'device-driven review; it does not enable the separate blind typed-hash endpoint.',
-       [])]),
+       []),
+      ('TD5', 'test_msg_eip712_streaming', 'test_real_safe_multisend_approve_names_weth',
+       'A real Safe MultiSend\'s unlimited WETH approve names WETH',
+       'The real Safe batch (approve(max) of WETH, then a CoW order) signs with the reference '
+       'hashes, and its warning reads "spend ALL your WETH", as on 7.16.0. A 7.17 alpha token '
+       'table had dropped WETH and showed only its contract address.',
+       ['UNLIMITED approval: spend ALL your WETH'])]),
 
 ]
 
@@ -3862,6 +3879,11 @@ _TEST_MIN_VERSION = {
     ('test_msg_tron_signtx', 'test_tron_vote_witness'): '7.17.0',
     ('test_msg_ethereum_message',
      'test_ethereum_sign_safe_tx_hash_shows_hex'): '7.17.0',
+    ('test_msg_ethereum_signtx', 'test_ethereum_unichain_amounts_read_eth'): '7.17.0',
+    ('test_msg_ethereum_erc7730_runtime',
+     'test_native_placeholder_alias_reads_as_the_native_coin'): '7.17.0',
+    ('test_msg_eip712_streaming',
+     'test_real_safe_multisend_approve_names_weth'): '7.16.0',
 }
 
 # Intermediate release-stack trees deliberately omit controls that land in a

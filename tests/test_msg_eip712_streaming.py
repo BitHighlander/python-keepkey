@@ -1283,5 +1283,23 @@ class TestMsgEip712Streaming(common.KeepKeyTest):
             titles = [title for title, _ in screens]
             self.assertEqual(titles.count('UNLIMITED approval'), warned)
 
+    def test_real_safe_multisend_approve_names_weth(self):
+        """A real Safe MultiSend (approve(max) of WETH, then a CoW order):
+        the warning names WETH, as 7.16.0 does. A priority-only token table
+        once showed only WETH's contract address here."""
+        self.requires_firmware("7.16.0")
+        self.requires_release_capability(es.CHUNKED_VALUES)
+        import json, os
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               'eip712_corpus.json')) as f:
+            entry = next(e for e in json.load(f)
+                         if e['id'] == 'safe-SafeTx-multisend-approve-unlimited')
+        resp, screens = self._walk_text(entry['doc'], max_steps=2000)
+        self._assert_signed(entry['doc'], resp)
+        self.assertEqual(
+            [body for title, body in screens if title == 'UNLIMITED approval'],
+            ['Allow 0xC92E8bdf79f0507f65a392b0ab4667716BFE0110 to spend '
+             'ALL your WETH'])
+
 if __name__ == '__main__':
     unittest.main()
