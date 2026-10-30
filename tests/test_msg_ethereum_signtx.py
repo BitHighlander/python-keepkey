@@ -114,6 +114,8 @@ class TestMsgEthereumSigntx(common.KeepKeyTest):
         resp = self.client.call_raw(msg)
         while isinstance(resp, proto.ButtonRequest):
             screens.append(self.client.debug.read_confirm_text())
+            if screens[-1][0] == "Tx on Unichain":
+                self.client.capture_oled()
             self.client.debug.press_yes()
             resp = self.client.call_raw(proto.ButtonAck())
         self.assertIsInstance(resp, eth_proto.EthereumTxRequest)
