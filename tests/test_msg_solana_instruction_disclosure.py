@@ -588,6 +588,7 @@ class TestSolanaInstructionDisclosure(common.KeepKeyTest):
             self._assert_pair(label, raw_a, raw_b)
 
     def test_token_2022_associated_account_is_opaque(self):
+        self.requires_firmware_below("7.17.0")
         accounts = [self.signer, b"\x41" * 32, b"\x42" * 32,
                     b"\x43" * 32, SYSTEM_PROGRAM, TOKEN_2022_PROGRAM,
                     ATA_PROGRAM]
@@ -596,3 +597,17 @@ class TestSolanaInstructionDisclosure(common.KeepKeyTest):
         )
         with pytest.raises(CallException):
             self.client.call(self._request(raw_tx))
+
+    def test_token_2022_associated_account_is_reviewed(self):
+        """7.17: wallets create a PYUSD recipient's account under Token-2022
+        before the transfer; it is reviewed like SPL Token's (account, owner,
+        mint), so a different mint must change the screens."""
+        self.requires_firmware("7.17.0")
+        raws = []
+        for mint in (b"\x43" * 32, b"\x44" * 32):
+            accounts = [self.signer, b"\x41" * 32, b"\x42" * 32, mint,
+                        SYSTEM_PROGRAM, TOKEN_2022_PROGRAM, ATA_PROGRAM]
+            raws.append(build_tx(
+                accounts, 1, [(6, [0, 1, 2, 3, 4, 5], b"")]
+            ))
+        self._assert_pair("token-2022-ata", raws[0], raws[1])
