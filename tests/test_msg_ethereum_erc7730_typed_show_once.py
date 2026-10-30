@@ -1,0 +1,193 @@
+"""Typed-data ERC-7730 shows each field once (7.17).
+
+A certified typed-data definition walks the message once per field value it
+needs. Through 7.16 every one of those walks showed every leaf again, so the
+CoW order below took several times the screens of plain streaming. From 7.17
+the walks behind a definition hash every leaf but show only what the
+definition shows, plus the device's own warnings and any value too long for
+a field to hold, each in the first walk only.
+
+The order is a real request: swaps.pro, CoW route, 25,000 USDC to ETH,
+captured 2026-10-29 (keepkey-vault docs/clearsign-case-studies/
+swapspro-20261029/requests/order-cow-usdc.json). Its receiver is the signing
+account of the "all all all" test mnemonic.
+
+The definition is signed by the throwaway runtime key (AdvancedMode, "NOT
+verified by KeepKey"); the stream behaves the same for every tier.
+"""
+
+import copy
+import hashlib
+
+import common
+from keepkeylib import eip712_stream, erc7730_compiler
+from keepkeylib import messages_ethereum_pb2 as eth
+from keepkeylib import messages_pb2 as proto
+from test_msg_ethereum_erc7730_runtime import Erc7730Harness
+
+PATH = [0x8000002C, 0x8000003C, 0x80000000, 0, 0]
+
+COW_ORDER = {
+    "types": {
+        "EIP712Domain": [
+            {"name": "name", "type": "string"},
+            {"name": "version", "type": "string"},
+            {"name": "chainId", "type": "uint256"},
+            {"name": "verifyingContract", "type": "address"}],
+        "Order": [
+            {"name": "sellToken", "type": "address"},
+            {"name": "buyToken", "type": "address"},
+            {"name": "receiver", "type": "address"},
+            {"name": "sellAmount", "type": "uint256"},
+            {"name": "buyAmount", "type": "uint256"},
+            {"name": "validTo", "type": "uint32"},
+            {"name": "appData", "type": "bytes32"},
+            {"name": "feeAmount", "type": "uint256"},
+            {"name": "kind", "type": "string"},
+            {"name": "partiallyFillable", "type": "bool"},
+            {"name": "sellTokenBalance", "type": "string"},
+            {"name": "buyTokenBalance", "type": "string"}]},
+    "primaryType": "Order",
+    "domain": {
+        "name": "Gnosis Protocol",
+        "version": "v2",
+        "chainId": 1,
+        "verifyingContract": "0x9008D19f58AAbD9eD0D60971565AA8510560ab41"},
+    "message": {
+        "sellToken": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+        "buyToken": "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE",
+        "receiver": "0x9858EfFD232B4033E47d90003D41EC34EcaEda94",
+        "sellAmount": "25000000000",
+        "buyAmount": "9487278979799916817",
+        "validTo": 1793308500,
+        "appData": "0x048680e79dfa12d06c2362b19faa34b7c754a3ed153d204656c48f82e84d4e60",
+        "feeAmount": "0",
+        "kind": "sell",
+        "partiallyFillable": False,
+        "sellTokenBalance": "erc20",
+        "buyTokenBalance": "erc20"}}
+
+ORDER_FORMAT = ("Order(address sellToken,address buyToken,address receiver,"
+                "uint256 sellAmount,uint256 buyAmount,uint32 validTo,"
+                "bytes32 appData,uint256 feeAmount,string kind,"
+                "bool partiallyFillable,string sellTokenBalance,"
+                "string buyTokenBalance)")
+
+# A GPv2 Order definition in ERC-7730 terms: what is sold, the least that
+# comes back, to whom, until when, and the fee.
+COW_DESCRIPTOR = {"display": {"formats": {ORDER_FORMAT: {
+    "intent": "Swap order",
+    "fields": [
+        {"path": "sellAmount", "label": "Sell", "format": "tokenAmount",
+         "params": {"tokenPath": "sellToken"}},
+        {"path": "buyAmount", "label": "Receive at least",
+         "format": "tokenAmount",
+         "params": {"tokenPath": "buyToken", "nativeCurrencyAddress":
+                    ["0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"]}},
+        {"path": "receiver", "label": "Recipient", "format": "addressName"},
+        {"path": "validTo", "label": "Expires", "format": "date",
+         "params": {"encoding": "timestamp"}},
+        {"path": "feeAmount", "label": "Fee", "format": "tokenAmount",
+         "params": {"tokenPath": "sellToken"}}]}}}}
+
+# What the definition shows, each once, in order.
+COW_FIELDS = [
+    ("Signer field", "Sell:\n25000 USDC"),
+    ("Signer field", "Receive at least:\n9.487278979799916817  ETH"),
+    ("Signer field", "Recipient:\n0x9858EfFD232B4033E47d90003D41EC34EcaEda94\n"
+                     "(this wallet)"),
+    ("Signer field", "Expires:\n2026-10-29 21:15:00 UTC\n(1793308500)"),
+    ("Signer field", "Fee:\n0 USDC"),
+]
+
+
+class TestMsgEthereumErc7730TypedShowOnce(Erc7730Harness, common.KeepKeyTest):
+    def setUp(self):
+        super().setUp()
+        self.requires_fullFeature()
+        self.requires_firmware("7.17.0")
+        self.requires_release_capability("erc7730-runtime-review")
+        self.requires_structured_eip712()
+        self.setup_mnemonic_abandon()
+        self.client.apply_policy("AdvancedMode", 1)
+
+    def _start(self, doc):
+        return eth.EthereumSignTypedData(
+            address_n=PATH, primary_type=doc["primaryType"],
+            metamask_v4_compat=True)
+
+    def _sign(self, doc, descriptor):
+        """Sign `doc` streamed, then with its certified definition. Returns
+        (streamed screens, certified screens, certified field walks)."""
+        baseline, streamed, _, _ = self._walk(self._start(doc), doc=doc)
+        self.assertIsInstance(baseline, eth.EthereumTypedDataSignature)
+        envelope = self._preload(erc7730_compiler.compile_eip712(descriptor, doc))
+        result, certified, _, walks = self._walk(self._start(doc), envelope, doc)
+        self.assertIsInstance(result, eth.EthereumTypedDataSignature)
+        # The definition changes what is shown, never what is signed.
+        self.assertEqual(result.signature, baseline.signature)
+        return streamed, certified, walks
+
+    def test_cow_order_shows_each_field_once(self):
+        streamed, certified, walks = self._sign(COW_ORDER, COW_DESCRIPTOR)
+        print("CoW order screens: streamed %d, certified %d (%d field walks)"
+              % (streamed, certified, walks))
+        pages = self._first_pages()
+        titles = [title for title, _ in pages]
+        # Every leaf was walked and hashed once per field value: amounts and
+        # their tokens, the receiver, the date.
+        self.assertEqual(walks, 8)
+        # No message leaf screen in any of those walks: the four domain
+        # leaves, then the definition, each field once, then the signature.
+        self.assertEqual(
+            [p for p in pages if p[0] == "Signer field"], COW_FIELDS)
+        self.assertEqual(
+            [t for t in titles if t not in ("Signer field",)],
+            ["EIP-712 Domain"] * 4 + ["Runtime signer", "Unverified data",
+                                      "Contract action", "Sign Typed Data"])
+        # The owner's ship rule: better than streaming.
+        self.assertLess(certified, streamed)
+
+    def test_a_leaf_changed_in_a_silent_walk_is_refused(self):
+        # The later walks show nothing, so each must hash the message the
+        # first one did. Walk 7 is the Fee field's first; a host that
+        # answers it with another fee is refused before Fee is shown.
+        envelope = self._preload(erc7730_compiler.compile_eip712(
+            COW_DESCRIPTOR, COW_ORDER))
+        tampered = copy.deepcopy(COW_ORDER)
+        tampered["message"]["feeAmount"] = "1"
+        definition_id = hashlib.sha256(envelope).digest()
+        shown = []
+        walks = 0
+        response = self.client.call_raw(self._start(COW_ORDER))
+        for _ in range(1000):
+            if isinstance(response, proto.ButtonRequest):
+                shown.append(self.client.debug.read_confirm_text())
+                self.client.debug.press_yes()
+                response = self.client.call_raw(proto.ButtonAck())
+            elif isinstance(response, eth.EthereumClearSignDefinitionRequest):
+                offset = response.offset
+                response = self.client.call_raw(
+                    eth.EthereumClearSignDefinitionChunk(
+                        definition_id=definition_id, offset=offset,
+                        total_length=len(envelope),
+                        data=envelope[offset:offset + response.length]))
+            elif isinstance(response, eth.EthereumTypedDataStructRequest):
+                response = self.client.call_raw(eip712_stream.build_struct_ack(
+                    eip712_stream.struct_members(COW_ORDER, response.name)))
+            elif isinstance(response, eth.EthereumTypedDataValueRequest):
+                path = list(response.member_path)
+                if path == [1, 0]:
+                    walks += 1
+                doc = tampered if walks == 7 else COW_ORDER
+                kind, field, value = eip712_stream.resolve_member_path(doc, path)
+                response = self.client.call_raw(eth.EthereumTypedDataValueAck(
+                    value=eip712_stream.encode_value(field, value)))
+            else:
+                break
+        self.assertIsInstance(response, proto.Failure)
+        self.assertEqual(response.message,
+                         "Certified EIP-712 value was not found")
+        self.assertEqual(walks, 7)
+        self.assertNotIn("Fee:", "".join(body for _, body in shown))
+        self.assertIn("Expires:", "".join(body for _, body in shown))
