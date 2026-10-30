@@ -258,12 +258,18 @@ class TestEthereumCertifiedUniswap(common.KeepKeyTest):
             (FEE_TITLE, None),
         ])
 
+    def swapThenFee(self, review):
+        """A swap past the first chunk is reviewed once every byte is in. From
+        7.17 the fee screen follows it as the final confirm; 7.16.0 asked the
+        fee first."""
+        if self.firmware_at_least("7.17.0"):
+            return review + [(FEE_TITLE, None)]
+        return [(FEE_TITLE, None)] + review
+
     def test_token_to_eth_past_the_first_chunk_is_reviewed_after_the_last_byte(self):
         self.assertGreater(len(USDC_TO_ETH_CALLDATA), 1024)
         screens = self._sign(ROUTER_212, USDC_TO_ETH_CALLDATA, UR212_ENVELOPE)
-        # The fee screen comes first: the swap is reviewed once every byte is in.
-        self.assertScreens(screens, [
-            (FEE_TITLE, None),
+        self.assertScreens(screens, self.swapThenFee([
             ("UNISWAP", "Swap 26.907974 USDC for at least 0.00984050230885008 ETH"),
             ("LIMITS", "You spend\n26.907974 USDC"),
             ("LIMITS", "You receive at least\n0.00984050230885008 ETH"),
@@ -272,7 +278,7 @@ class TestEthereumCertifiedUniswap(common.KeepKeyTest):
             ("CONTRACT", None),
             ("KEEPKEY CLEARSIGN", "Described by KeepKey Alpha 716 A9531B9D\n"
                                   "certified by KeepKey"),
-        ])
+        ]))
 
     def test_token_to_eth_with_a_changed_tail_byte_is_not_the_reviewed_swap(self):
         data = bytearray(USDC_TO_ETH_CALLDATA)
@@ -284,8 +290,7 @@ class TestEthereumCertifiedUniswap(common.KeepKeyTest):
         self.assertGreater(len(ETH_TO_USDC_V4_CALLDATA), 1024)
         screens = self._sign(ROUTER_212, ETH_TO_USDC_V4_CALLDATA, UR212_ENVELOPE,
                              value=ETH_TO_USDC_V4_VALUE)
-        self.assertScreens(screens, [
-            (FEE_TITLE, None),
+        self.assertScreens(screens, self.swapThenFee([
             ("UNISWAP", "Swap 0.0004 ETH for at least 1.064772 USDC"),
             ("LIMITS", "You spend\n0.0004 ETH"),
             ("LIMITS", "You receive at least\n1.064772 USDC"),
@@ -294,7 +299,7 @@ class TestEthereumCertifiedUniswap(common.KeepKeyTest):
             ("CONTRACT", "execute\n0xd6145b2D3F379919E8CdEda7B97e37c4b2Ca9c40"),
             ("KEEPKEY CLEARSIGN", "Described by KeepKey Alpha 716 A9531B9D\n"
                                   "certified by KeepKey"),
-        ])
+        ]))
 
     def test_real_v4_with_a_changed_take_currency_is_refused(self):
         data = bytearray(ETH_TO_USDC_V4_CALLDATA)
