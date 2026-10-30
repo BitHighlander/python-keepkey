@@ -223,6 +223,7 @@ class TestMsgTronSignTx(common.KeepKeyTest):
         response = self.client.call_raw(msg)
         while isinstance(response, messages.ButtonRequest):
             screens.append(self.client.debug.read_confirm_text())
+            self.client.capture_oled()
             self.client.debug.press_yes()
             response = self.client.call_raw(messages.ButtonAck())
         return response, screens
