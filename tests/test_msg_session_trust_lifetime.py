@@ -310,8 +310,11 @@ class TestSessionTrustLifetime(common.KeepKeyTest):
             return
         self._emu = boot_owned_emulator(self)
         if self._emu is not None:
-            self.client.close()
-            self.client = self._emu.client(self._testMethodName)
+            shared = self.client
+            shared.close()
+            self.client = self._emu.client(
+                self._testMethodName,
+                screenshot_dir=getattr(shared, 'screenshot_dir', None))
 
     def _power_cycle(self):
         """Kill and relaunch the firmware, KEEPING its flash image.
