@@ -7,7 +7,9 @@
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
 """7.17: a KeepKey-certified 0x06 name record names the spender of a native
-ERC-20 approve, beside its full address. It never changes what is signed.
+ERC-20 approve, or the recipient of a plain send, on one screen of its own
+right after the screen with the full address. That screen stays exactly the
+7.16 one, and nothing signed changes.
 
 ETH_UR_NAME and BSC_UR_NAME are production name records from batch 2 of the
 2026-10-16 ClearSign ceremony (signed-catalog-batch2.json), certified by the
@@ -57,8 +59,9 @@ def approve_to(spender_hex):
 
 UR_APPROVE = approve_to("66a9893cc07d91d95644aedd05d03f95e1dba8af")
 BSC_UR_APPROVE = approve_to("ec8b0f7ffe3ae75d7ffab09429e3675bb63503e4")
-PROVENANCE = ("Spender named by KeepKey ClearSign FDD258EC\n"
-              "certified by KeepKey")
+UR = bytes.fromhex("66a9893cc07d91d95644aedd05d03f95e1dba8af")
+COW_RELAYER = bytes.fromhex("c92e8bdf79f0507f65a392b0ab4667716bfe0110")
+BY = "named by KeepKey ClearSign FDD258EC\ncertified by KeepKey"
 
 
 class TestEthereumApproveNames(common.KeepKeyTest):
@@ -70,46 +73,68 @@ class TestEthereumApproveNames(common.KeepKeyTest):
         self.setup_mnemonic_allallall()
 
     def _approve(self, data, record=None):
+        return self._sign(USDC, 0, data, record)
+
+    def _send(self, to, record=None):
+        return self._sign(to, 10**18, b"", record)
+
+    def _sign(self, to, value, data, record):
         if record is not None:
             resp = self.client.ethereum_send_tx_metadata(
                 signed_payload=record, metadata_version=3, key_id=0x80)
             self.assertEqual(resp.classification, 1)  # VERIFIED
-        recorder = ScreenRecorder(self.client, answer=True,
-                                  screenshot_group="eth-approve-names")
+        # No screenshot group: every run's frames go to this test's own
+        # directory in order, which is what the report audits.
+        recorder = ScreenRecorder(self.client, answer=True)
         with recorder:
             sig = self.client.ethereum_sign_tx(
                 n=parse_path("m/44'/60'/0'/0/0"), nonce=7, gas_limit=60000,
                 max_fee_per_gas=0xd52bef138, max_priority_fee_per_gas=10**9,
-                value=0, to=USDC, data=data, chain_id=1)
+                value=value, to=to, data=data, chain_id=1)
         return sig, recorder.screens
 
     def _titled(self, screens, title):
         return [s for s in screens
                 if find_line(s, title, TITLE_FONT) is not None]
 
-    def test_vouched_spender_is_named_beside_its_address(self):
+    def _assert_named_after(self, screens, plain, after, text):
+        """`screens` is `plain` plus one KeepKey ClearSign screen showing
+        `text`, right after plain[after]."""
+        vouched = self._titled(screens, "KEEPKEY CLEARSIGN")
+        self.assertEqual(len(vouched), 1)
+        self.assertIs(vouched[0], screens[after + 1])
+        self.assertTrue(shows(vouched[0], text))
+        self.assertEqual(screens[:after + 1] + screens[after + 2:], plain)
+        self.assertEqual(self._titled(plain, "KEEPKEY CLEARSIGN"), [])
+
+    def test_vouched_spender_is_named_after_its_address(self):
         plain_sig, plain = self._approve(UR_APPROVE)
         sig, screens = self._approve(UR_APPROVE, ETH_UR_NAME)
         self.assertEqual(sig, plain_sig)  # nothing signed changes
-        # The named approve, then who named it, then the fee screen.
-        self.assertEqual(screens[-1], plain[-1])
-        # confirm() pages the body: the name and full address span 1/2, 2/2.
-        self.assertTrue(shows(
-            screens[0], "Approve withdrawal of up to 25000 USDC by Uniswap "
-                        "Universal Router (0x66a9893cC07D91D95644AEDD05D03f95e"
-                        "1dB"))
-        self.assertTrue(shows(screens[1], "A8Af)?"))
+        # The 7.16 approve screen, whole address on one page, then the name.
         self.assertTrue(shows(
             plain[0], "Approve withdrawal of up to 25000 USDC by "
                       "0x66a9893cC07D91D95644AEDD05D03f95e1dBA8Af?"))
-        vouched = self._titled(screens, "KEEPKEY CLEARSIGN")
-        self.assertEqual(len(vouched), 1)
-        self.assertIs(vouched[0], screens[-2])
-        self.assertTrue(shows(vouched[0], PROVENANCE))
-        self.assertEqual(self._titled(plain, "KEEPKEY CLEARSIGN"), [])
+        self._assert_named_after(screens, plain, 0,
+                                 "Spender: Uniswap Universal Router\n" + BY)
         # One request per record: the next approve is not named.
         _, again = self._approve(UR_APPROVE)
         self.assertEqual(again, plain)
+
+    def test_vouched_send_recipient_is_named_after_its_address(self):
+        plain_sig, plain = self._send(UR)
+        sig, screens = self._send(UR, ETH_UR_NAME)
+        self.assertEqual(sig, plain_sig)
+        self.assertTrue(shows(
+            plain[0], "Send 1 ETH to "
+                      "0x66a9893cC07D91D95644AEDD05D03f95e1dBA8Af"))
+        self._assert_named_after(screens, plain, 0,
+                                 "Recipient: Uniswap Universal Router\n" + BY)
+        # Control: the same record on a send to another address names nothing.
+        other_sig, other_plain = self._send(COW_RELAYER)
+        sig, screens = self._send(COW_RELAYER, ETH_UR_NAME)
+        self.assertEqual(sig, other_sig)
+        self.assertEqual(screens, other_plain)
 
     def test_name_for_another_spender_is_ignored(self):
         plain_sig, plain = self._approve(COW_APPROVE)
@@ -133,6 +158,12 @@ class TestEthereumApproveNames(common.KeepKeyTest):
             self._approve(UR_APPROVE)
         self.assertEqual(e.exception.args[1],
                          "Certified description invalid or not for this tx")
+        # The refused record does not carry over to the next request.
+        _, plain = self._approve(UR_APPROVE)
+        self.assertTrue(shows(
+            plain[0], "Approve withdrawal of up to 25000 USDC by "
+                      "0x66a9893cC07D91D95644AEDD05D03f95e1dBA8Af?"))
+        self.assertEqual(self._titled(plain, "KEEPKEY CLEARSIGN"), [])
 
 
 if __name__ == '__main__':

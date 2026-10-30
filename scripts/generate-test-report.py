@@ -540,6 +540,11 @@ FULL_SEQUENCE_TESTS = {
      'test_certifying_shows_every_contact_and_signs_only_the_commitment'),
     ('test_msg_ethereum_certified_contacts',
      'test_a_send_to_a_contact_names_it_and_still_shows_the_address'),
+    # The claim is the order: the 7.16 address screen, then the name.
+    ('test_msg_ethereum_approve_names',
+     'test_vouched_spender_is_named_after_its_address'),
+    ('test_msg_ethereum_approve_names',
+     'test_vouched_send_recipient_is_named_after_its_address'),
     ('test_msg_ethereum_clear_signing', 'test_binding_happy_path_signs_and_recovers'),
     ('test_msg_ethereum_clear_signing', 'test_clearsign_uniswap_v2_eth_to_token'),
     # ERC-7730 runtime: the order of the screens is the claim.
@@ -2831,6 +2836,72 @@ SECTIONS = [
           'list is the assertion.',
           []),
      ]),
+    ('AN', 'Certified Names - Who An Approval Or Send Goes To', '7.17.0',
+     'An approval hands a contract the right to move the user\'s tokens, and the device can only '
+     'show that contract as forty hex characters. From 7.17 a name record certified by KeepKey '
+     '(a 0x06 record from a ClearSign ceremony, signed under the root every 7.17 build embeds) '
+     'can name that address. The device checks the record, and only when it names exactly the '
+     'spender of a native approve, or the recipient of a token transfer or plain send, on this '
+     'chain does it add one screen with the name and who vouched for it. The address screens '
+     'stay exactly as in 7.16, so the name never pushes part of the address onto another page.',
+     [
+         'RULE: a name is added, never substituted. The 7.16 screens are all still shown, unchanged,',
+         'and one "KeepKey ClearSign" screen follows the first one that shows the full address.',
+         '',
+         '- Shown for: a native approve (and the UNLIMITED warning of approve or increaseAllowance),',
+         '  an ERC-20 transfer of a known token, and a plain send.',
+         '- A record for another address or another chain changes nothing: the screens and the',
+         '  signature equal the run with no record.',
+         '- A malformed record refuses the request, as every malformed record does.',
+         '',
+         'The records are production records from ceremony batch 2 (Uniswap Universal Router on',
+         'Ethereum, a router on BNB Chain). The approve is the calldata swaps.pro sent through',
+         'Desktop on 2026-10-29. Each case signs the same request with and without the record and',
+         'requires the same signature.',
+     ],
+     [
+         ('AN1', 'test_msg_ethereum_approve_names',
+          'test_vouched_spender_is_named_after_its_address',
+          'A certified name follows the approve screen, which stays whole',
+          'The same 25000 USDC approve to the Universal Router is signed without and with its '
+          'production name record. The named review is the unnamed one plus one screen, '
+          '"Spender: Uniswap Universal Router, named by KeepKey ClearSign FDD258EC, certified '
+          'by KeepKey", right after the approve screen, which still shows the whole address on '
+          'one page. The signatures are equal, and the next approve with no new record is the '
+          'unnamed review again.',
+          ['Approve screen, unchanged from 7.16, with the whole spender address',
+           'KeepKey ClearSign: Spender: Uniswap Universal Router',
+           'Fee screen']),
+         ('AN2', 'test_msg_ethereum_approve_names',
+          'test_vouched_send_recipient_is_named_after_its_address',
+          'A plain send names its recipient the same way',
+          'A 1 ETH send to the Universal Router, with and without its record: the send screen is '
+          'unchanged and one "Recipient: Uniswap Universal Router" screen follows it. Control: '
+          'the same record on a send to another address leaves every screen and the signature '
+          'as they were.',
+          ['Send 1 ETH to the whole address, unchanged from 7.16',
+           'KeepKey ClearSign: Recipient: Uniswap Universal Router',
+           'Fee screen']),
+         ('AN3', 'test_msg_ethereum_approve_names',
+          'test_name_for_another_spender_is_ignored',
+          'A name for another address names nothing',
+          'The Universal Router record is loaded before the CoW approve. The review and the '
+          'signature equal the run with no record.',
+          ['Approve screen identical to the unnamed run']),
+         ('AN4', 'test_msg_ethereum_approve_names',
+          'test_name_for_another_chain_is_ignored',
+          'A name for another chain names nothing',
+          'The BNB Chain record for a router address is loaded before an Ethereum approve to the '
+          'same address. The review and the signature equal the run with no record.',
+          ['Approve screen identical to the unnamed run']),
+         ('AN5', 'test_msg_ethereum_approve_names',
+          'test_malformed_name_record_refuses_the_approve',
+          'A malformed record refuses, and does not linger',
+          'One bit of the delegate\'s signature is flipped. The record is classified MALFORMED and '
+          'the approve after it is refused before any screen. The next approve, with no record, '
+          'is the ordinary unnamed review.',
+          ['Approve screen of the next, unnamed request']),
+     ]),
     ('I', 'Session and Trust Lifetime', '7.15.0',
      'Clear-signing works by trusting somebody else. A provider key loaded with LoadClearsignSigner '
      'decides which transactions the device is willing to describe in words, and AdvancedMode decides '
@@ -4122,6 +4193,8 @@ MUST_RUN_MODULES = {
     'test_msg_ethereum_erc7730_runtime': '7.15.0',
     # Certified contacts: every row in section AB.
     'test_msg_ethereum_certified_contacts': '7.15.0',
+    # Certified names: every row in section AN.
+    'test_msg_ethereum_approve_names': '7.17.0',
 }
 
 # A module can be mandatory for the regular product while being intentionally
@@ -4133,6 +4206,7 @@ FULL_FEATURE_ONLY_MUST_RUN_MODULES = {
     'test_msg_solana_lut_attestation',
     'test_msg_ethereum_erc7730_runtime',
     'test_msg_ethereum_certified_contacts',
+    'test_msg_ethereum_approve_names',
 }
 
 
