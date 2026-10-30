@@ -101,6 +101,46 @@ COW_FIELDS = [
 ]
 
 
+# Permit2 PermitBatch granting the maximum uint160 allowance: the shape
+# Uniswap sends, one token. With a definition required there is no native
+# Permit2 review, so the device's UNLIMITED leaf screen is its only warning.
+PERMIT_BATCH = {
+    "types": {
+        "EIP712Domain": [
+            {"name": "name", "type": "string"},
+            {"name": "chainId", "type": "uint256"},
+            {"name": "verifyingContract", "type": "address"}],
+        "PermitDetails": [
+            {"name": "token", "type": "address"},
+            {"name": "amount", "type": "uint160"},
+            {"name": "expiration", "type": "uint48"},
+            {"name": "nonce", "type": "uint48"}],
+        "PermitBatch": [
+            {"name": "details", "type": "PermitDetails[]"},
+            {"name": "spender", "type": "address"},
+            {"name": "sigDeadline", "type": "uint256"}]},
+    "primaryType": "PermitBatch",
+    "domain": {
+        "name": "Permit2",
+        "chainId": 1,
+        "verifyingContract": "0x000000000022D473030F116dDEE9F6B43aC78BA3"},
+    "message": {
+        "details": [{
+            "token": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+            "amount": str(2 ** 160 - 1),
+            "expiration": "1893456000",
+            "nonce": "1"}],
+        "spender": "0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD",
+        "sigDeadline": "1893456000"}}
+
+# Names the spender and the deadline; never mentions the amount.
+PERMIT_BATCH_DESCRIPTOR = {"display": {"formats": {"PermitBatch(": {
+    "intent": "Permit",
+    "fields": [
+        {"path": "spender", "label": "Spender", "format": "addressName"},
+        {"path": "sigDeadline", "label": "Deadline", "format": "date",
+         "params": {"encoding": "timestamp"}}]}}}}
+
 class TestMsgEthereumErc7730TypedShowOnce(Erc7730Harness, common.KeepKeyTest):
     def setUp(self):
         super().setUp()
@@ -191,3 +231,10 @@ class TestMsgEthereumErc7730TypedShowOnce(Erc7730Harness, common.KeepKeyTest):
         self.assertEqual(walks, 7)
         self.assertNotIn("Fee:", "".join(body for _, body in shown))
         self.assertIn("Expires:", "".join(body for _, body in shown))
+
+    def test_an_unlimited_permit_is_warned_once_whatever_the_definition(self):
+        _, _, walks = self._sign(PERMIT_BATCH, PERMIT_BATCH_DESCRIPTOR)
+        self.assertEqual(walks, 2)
+        self.assertEqual(
+            [p for p in self._first_pages() if p[0] == "UNLIMITED approval"],
+            [("UNLIMITED approval", "details[0].amount\nuint160: UNLIMITED")])
