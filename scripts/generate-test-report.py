@@ -1329,6 +1329,12 @@ SECTIONS = [
           ['Sign message screen']),
          ('E8', 'test_msg_ethereum_message', 'test_ethereum_sign_bytes',
           'Sign raw bytes', 'Signs arbitrary bytes (displayed as hex on OLED).', []),
+         ('E8b', 'test_msg_ethereum_message', 'test_ethereum_sign_safe_tx_hash_shows_hex',
+          'Safe safeTxHash shown as 0x hex (7.17)',
+          'A real Safe safeTxHash signed with eth_sign. Bytes that are not text are shown as 0x hex '
+          'under "Sign Binary Message", as Safe{Wallet} prints the hash, instead of C-escaped '
+          'bytes. The signature equals 7.16.0\'s.',
+          ['Sign Binary Message: 0x hex']),
          ('E9', 'test_msg_ethereum_message', 'test_ethereum_verify_message',
           'Verify ETH signed message', 'Device-side verification of EIP-191 signed messages.', []),
          ('E10', 'test_msg_signtx_ethereum_erc20', 'test_approve_some',
@@ -3854,6 +3860,8 @@ _TEST_MIN_VERSION = {
     ('test_msg_tron_signtx', 'test_tron_usdt_approve_shows_amount'): '7.17.0',
     ('test_msg_tron_signtx', 'test_tron_freeze_v2'): '7.17.0',
     ('test_msg_tron_signtx', 'test_tron_vote_witness'): '7.17.0',
+    ('test_msg_ethereum_message',
+     'test_ethereum_sign_safe_tx_hash_shows_hex'): '7.17.0',
 }
 
 # Intermediate release-stack trees deliberately omit controls that land in a
