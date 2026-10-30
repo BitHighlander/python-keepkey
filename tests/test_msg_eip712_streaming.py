@@ -1086,10 +1086,12 @@ class TestMsgEip712Streaming(common.KeepKeyTest):
     # with CAPABILITY_EIP712_CHUNKED_VALUES takes them in 1 KB chunks and
     # shows every byte, numbered over the whole value.
 
-    def _walk_text(self, doc, tamper=None, decline=None, max_steps=600):
+    def _walk_text(self, doc, tamper=None, decline=None, max_steps=600,
+                   capture=None):
         """The walk, recording each confirmation's (title, body) exactly as
         formatted (once per confirmation, however it is paged). `tamper`
-        may rewrite a value answer; `decline` names a body prefix to reject."""
+        may rewrite a value answer; `decline` names a body prefix to reject;
+        `capture` names a title prefix whose screens are captured."""
         msg = eth.EthereumSignTypedData(address_n=PATH,
                                         primary_type=doc['primaryType'],
                                         metamask_v4_compat=True)
@@ -1100,6 +1102,8 @@ class TestMsgEip712Streaming(common.KeepKeyTest):
             if isinstance(resp, proto.ButtonRequest):
                 text = self.client.debug.read_confirm_text()
                 pages.add(resp.code, text)
+                if capture and text[0].startswith(capture):
+                    self.client.capture_oled()
                 if decline and text[1].startswith(decline):
                     self.client.debug.press_no()
                 else:
@@ -1282,6 +1286,25 @@ class TestMsgEip712Streaming(common.KeepKeyTest):
             self._assert_signed(doc, resp)
             titles = [title for title, _ in screens]
             self.assertEqual(titles.count('UNLIMITED approval'), warned)
+
+    def test_real_safe_multisend_approve_names_weth(self):
+        """A real Safe MultiSend (approve(max) of WETH, then a CoW order):
+        the warning names WETH, as 7.16.0 does. A priority-only token table
+        once showed only WETH's contract address here."""
+        self.requires_firmware("7.16.0")
+        self.requires_release_capability(es.CHUNKED_VALUES)
+        import json, os
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               'eip712_corpus.json')) as f:
+            entry = next(e for e in json.load(f)
+                         if e['id'] == 'safe-SafeTx-multisend-approve-unlimited')
+        resp, screens = self._walk_text(entry['doc'], max_steps=2000,
+                                        capture='UNLIMITED approval')
+        self._assert_signed(entry['doc'], resp)
+        self.assertEqual(
+            [body for title, body in screens if title == 'UNLIMITED approval'],
+            ['Allow 0xC92E8bdf79f0507f65a392b0ab4667716BFE0110 to spend '
+             'ALL your WETH'])
 
 if __name__ == '__main__':
     unittest.main()

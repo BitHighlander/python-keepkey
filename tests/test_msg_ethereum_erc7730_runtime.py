@@ -364,6 +364,18 @@ class TestMsgEthereumErc7730Runtime(Erc7730Harness, common.KeepKeyTest):
             ["Amount:\nSigner native alias:\n0x" + self.NATIVE.hex() +
              "\n1.5 ETH"])
 
+    def test_native_placeholder_alias_reads_as_the_native_coin(self):
+        """7.17: the zero address a signer calls native (a Safe's gas token)
+        reads as the coin itself, not as a signer mapping."""
+        self.requires_firmware("7.17.0")
+        zero = bytes(20)
+        params = {"nativeCurrencyAddress": ["0x" + zero.hex()]}
+        self.assertEqual(self._token_screen(zero, 10 * 10 ** 18, params),
+                         ["Amount:\n10 ETH"])
+        # Not aliased, the zero address is still an unknown token.
+        self.assertEqual(self._token_screen(zero, 42), [
+            "Amount:\n42\nunknown token\n0x" + zero.hex()])
+
     def test_address_name_marks_only_the_signing_account(self):
         signer = self.client.ethereum_get_address(PATH)
         if not isinstance(signer, bytes):
