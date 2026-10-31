@@ -12,12 +12,16 @@ type, identifier and amounts of every item of the order, and the recipient
 of each item it pays out ("settlement": "type", "id", "amount", "to"); an
 item without a recipient is one the order gives away. The device keeps what
 is paid to the signing address it derives itself, and what is given, and
-after the definition's last field shows what this wallet receives net of
-what it gives of the same item, on a screen the definition cannot change or
-skip: "You receive" with the totals, or "WARNING" when this wallet receives
-nothing net, only unknown tokens, NFTs or dust for what it gives, or gives
-an item the device could not read. What is signed never changes, and every
-value is still shown exactly once.
+after the definition's last field shows both sides on a screen the
+definition cannot change or skip: "You give:" (every item given) and "You
+receive:" (net of the same coin given; WETH nets as ETH). The device has no
+prices, so the screen never calls an order fair: it is a neutral "Order
+summary", or "WARNING" with one line per fact the device can tell from the
+order: nothing received net, only unknown tokens or NFTs for what it gives,
+every known coin under a floor, a given item it could not read, an NFT item
+naming a coin or 0xEeee...EEeE, an ERC-721 ID of 2^64 or more outside the
+collections it knows, or an unknown ERC-20 given. What is signed never
+changes, and every value is still shown exactly once.
 
 An item whose type is marked is also shown as Seaport moves it: an NFT
 item's amount reads as its identifier and count ("NFT ID 446", "2 of NFT ID
@@ -30,8 +34,9 @@ ERC-721 answers too: an ERC-20 item naming an NFT collection gives the NFT
 whose ID is the amount. So giving an ERC-20 the table does not list on the
 chain makes the last screen a warning.
 
-Dust is counted in units, not value: under a millionth of one coin, or under
-a hundredth of one for six decimals or fewer (one base unit of USDC is dust).
+The floor is counted in units, not value: 0.0001 of one coin, or 0.01 of
+one for six decimals or fewer (one base unit of USDC is under it). Paying
+above it removes that line, never the side given.
 
 On the certified tier ("Verified by KeepKey") the firmware refuses a Seaport
 OrderComponents definition without the settlement review (firmware unit
@@ -52,6 +57,7 @@ runtime key (AdvancedMode, "NOT verified by KeepKey").
 """
 
 import copy
+import re
 from decimal import Decimal
 
 import common
@@ -69,6 +75,9 @@ STRANGER = "0x00000000000000000000000000000000DeaDBeef"
 WETH = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
 WORTHLESS = "0x1111111111111111111111111111111111111111"
 USDC = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+USDE = "0x4c9EDD5852cd905f086C759E8383e09bff1E68B3"
+DCN = "0x08d32b0da63e2C3bcF8019c9c5d849d7a9d791e6"
+EEEE = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"
 CONDUIT = "0x0000007b02230091a7ed01230072f7006a004d60a8d4e71d599b8104250f0000"
 SELLER = "seller"  # the real offerer: this wallet in every test
 
@@ -271,14 +280,48 @@ def _paid(doc, *items):
 
 MAINNET = [_as_signer(LISTING), _as_signer(CREATOR_FEE)]
 NATIVE = {1: "ETH", 8453: "ETH", 42161: "ETH", 43114: "AVAX"}
-DUST = "This wallet gets only unknown tokens, NFTs or dust:\n"
-NOTHING = ("WARNING", "Nothing in this order is paid to this wallet.")
+SUMMARY = "Order summary"
+NOTHING = "Nothing in this order is paid to this wallet."
+BACK = "This wallet gets back no more than it gives."
+UNKNOWN = "This wallet gets only unknown tokens or NFTs."
 COIN_WETH = ("An NFT item names the token WETH: Seaport moves its ID as an "
-             "amount of WETH.\n")
+             "amount of WETH.")
+LARGE_ID = ("An NFT ID is 2^64 or more: if its contract is a token, Seaport "
+            "moves that many units of it.")
 NFT = LISTING["message"]["offer"][0]["token"]
 GIVES_UNKNOWN = ("This wallet gives a token the device does not know: if it "
                  "is an NFT collection, Seaport moves the NFT whose ID is the "
-                 "amount.\n")
+                 "amount.")
+
+
+def _under(coin):
+    return "This wallet gets under %s." % coin
+
+
+def _screen(warnings, give, receive):
+    """The settlement screen: its title, then its warning lines and both
+    sides."""
+    body = "".join(line + "\n" for line in warnings)
+    body += "You give:\n%s\nYou receive:\n%s" % (give, receive)
+    return ("WARNING" if warnings else SUMMARY, body)
+
+
+def _nft(item_type, token, identifier, amount):
+    """An NFT item as the device shows it."""
+    if item_type == 2 and int(amount) == 1:
+        return "NFT ID %s\n%s" % (identifier, token)
+    if item_type in (2, 3):
+        return "%s of NFT ID %s\n%s" % (amount, identifier, token)
+    return "%s NFT by criteria\n%s" % (amount, token)
+
+
+def _given(doc):
+    """The side given of a listing that gives NFTs only."""
+    return "\n".join(_nft(i["itemType"], i["token"], i["identifierOrCriteria"],
+                          i["endAmount"]) for i in doc["message"]["offer"])
+
+
+GIVEN = _given(MAINNET[0])
 
 
 def _native(amount, chain):
@@ -290,18 +333,25 @@ def _native(amount, chain):
 
 
 def _expected(doc):
-    """The settlement screen a real listing gets, from the order alone: the
-    seller's one payment, in the native coin (calm) or in a token this
-    firmware's table does not list on that chain (a warning)."""
+    """The settlement screen a real listing gets, from the order alone: what
+    it gives, and the seller's one payment, in the native coin, or in a
+    token this firmware's table does not list on that chain (a warning)."""
     chain = doc["domain"]["chainId"]
     mine = [item for item in doc["message"]["consideration"]
             if item["recipient"] == SIGNER]
     assert len(mine) == 1
     amount = int(mine[0]["startAmount"])
+    warnings = [LARGE_ID for item in doc["message"]["offer"]
+                if item["itemType"] == 2 and
+                int(item["identifierOrCriteria"]) >= 2 ** 64]
     if mine[0]["itemType"] == 0:
-        return ("You receive", _native(amount, chain))
-    return ("WARNING", "%s%d\nunknown token\n%s" % (DUST, amount,
-                                                     mine[0]["token"]))
+        if amount < 10 ** 14:
+            warnings.append(_under("0.0001 " + NATIVE[chain]))
+        receive = _native(amount, chain)
+    else:
+        warnings.append(UNKNOWN)
+        receive = "%d\nunknown token\n%s" % (amount, mine[0]["token"])
+    return _screen(warnings, _given(doc), receive)
 
 
 class TestMsgEthereumErc7730Settlement(Erc7730Harness, common.KeepKeyTest):
@@ -346,22 +396,53 @@ class TestMsgEthereumErc7730Settlement(Erc7730Harness, common.KeepKeyTest):
         return self._first_pages()
 
     def _settlement(self, doc, descriptor=None):
-        """The settlement screen(s) of `doc`, after checking where they are:
-        right after the definition's last field."""
-        pages = self._sign(doc, descriptor)
-        shown = [(title, body) for title, body in pages
-                 if title in ("You receive", "WARNING")]
+        return self._settlement_of(self._sign(doc, descriptor))
+
+    def _settlement_of(self, pages):
+        """The settlement screen(s) in `pages`, after checking where they
+        are: right after the definition's last field. A body too long for
+        one screen is shown in numbered parts ("WARNING (1/2)", each its own
+        confirmation, split between lines); they are joined here."""
+        part = re.compile(r"^(%s|WARNING)(?: \((\d+)/(\d+)\))?$" % SUMMARY)
+        shown, first, expect = [], None, None
+        for i, (title, body) in enumerate(pages):
+            match = part.match(title)
+            if not match:
+                self.assertIsNone(expect, "settlement parts cut short")
+                continue
+            name, index, total = match.groups()
+            if index is None or index == "1":
+                self.assertIsNone(expect, "settlement parts cut short")
+                shown.append([name, body])
+                first = i if first is None else first
+            else:
+                self.assertEqual((name, int(index), int(total)), expect)
+                shown[-1][1] += body
+            expect = (None if index is None or index == total
+                      else (name, int(index) + 1, int(total)))
+        self.assertIsNone(expect, "settlement parts cut short")
         if shown:
             fields = [i for i, (title, _) in enumerate(pages)
                       if title.startswith("Signer field")]
-            self.assertEqual(pages.index(shown[0]), fields[-1] + 1)
-        return shown
+            self.assertEqual(first, fields[-1] + 1)
+        return [tuple(screen) for screen in shown]
 
-    def test_real_listings_show_what_this_wallet_receives(self):
-        # Paid in the native coin: calm. Paid in Polygon WETH or USDC.e: a
-        # warning, because this firmware's token table lists no Polygon
-        # token (a table limit; the device cannot tell them from a token an
-        # attacker made).
+    def _with_offer(self, doc, *items):
+        """`doc` giving `items` instead: (itemType, token, identifier,
+        amount)."""
+        doc = copy.deepcopy(doc)
+        doc["message"]["offer"] = [
+            {"itemType": t, "token": token, "identifierOrCriteria": i,
+             "startAmount": a, "endAmount": a} for t, token, i, a in items]
+        return doc
+
+    def test_real_listings_show_both_sides(self):
+        # Paid in the native coin: a neutral summary (under 0.0001 ETH, the
+        # three Base listings, a line says so). Paid in Polygon WETH or
+        # USDC.e: a warning, because this firmware's token table lists no
+        # Polygon token (a table limit; the device cannot tell them from a
+        # token an attacker made). Two Polygon ERC-721 IDs are hashes over
+        # 2^64: a line says so.
         for order in MAINNET + [_real(o) for o in REAL_ORDERS]:
             message = order["message"]
             with self.subTest(chain=order["domain"]["chainId"],
@@ -370,37 +451,59 @@ class TestMsgEthereumErc7730Settlement(Erc7730Harness, common.KeepKeyTest):
 
     def test_one_wei_to_a_stranger_warns(self):
         self.assertEqual(self._settlement(
-            _paid(MAINNET[0], (0, ZERO, "1", STRANGER))), [NOTHING])
+            _paid(MAINNET[0], (0, ZERO, "1", STRANGER))),
+            [_screen([NOTHING], GIVEN, "Nothing")])
 
     def test_a_redirected_payment_warns(self):
         # The real creator-fee listing, the seller's payment sent elsewhere:
         # every payment goes to another address.
         doc = copy.deepcopy(MAINNET[1])
         doc["message"]["consideration"][0]["recipient"] = STRANGER
-        self.assertEqual(self._settlement(doc), [NOTHING])
+        self.assertEqual(self._settlement(doc),
+                         [_screen([NOTHING], _given(doc), "Nothing")])
 
     def test_an_order_from_another_wallet_pays_this_wallet_nothing(self):
         # The real listing unchanged: its seller is not this wallet.
-        self.assertEqual(self._settlement(LISTING), [NOTHING])
+        self.assertEqual(self._settlement(LISTING),
+                         [_screen([NOTHING], GIVEN, "Nothing")])
 
     def test_one_wei_to_this_wallet_warns(self):
         self.assertEqual(self._settlement(_paid(
             MAINNET[0], (0, ZERO, "1", SIGNER),
             (0, ZERO, "5589978100000000", OPENSEA_FEE))),
-            [("WARNING", DUST + "1 Wei")])
+            [_screen([_under("0.0001 ETH")], GIVEN, "1 Wei")])
+
+    def test_a_millionth_of_an_eth_for_an_nft_warns(self):
+        # Review r1: 10^12 wei passed the old floor (a millionth of one) and
+        # read as a calm "You receive: 0.000001 ETH".
+        self.assertEqual(self._settlement(_paid(
+            MAINNET[0], (0, ZERO, "1000000000000", SIGNER))),
+            [_screen([_under("0.0001 ETH")], GIVEN, "0.000001 ETH")])
 
     def test_a_worthless_token_payment_warns(self):
         self.assertEqual(self._settlement(_paid(
             MAINNET[0], (1, WORTHLESS, "1000000000000000000000", SIGNER),
             (0, ZERO, "5589978100000000", OPENSEA_FEE))),
-            [("WARNING", DUST + "1000000000000000000000\nunknown token\n" +
-              WORTHLESS)])
+            [_screen([UNKNOWN], GIVEN,
+                     "1000000000000000000000\nunknown token\n" + WORTHLESS)])
+
+    def test_a_dead_table_token_shows_what_is_given(self):
+        # Review r1: a coin the table lists that nobody values (Dentacoin,
+        # no decimals) is above any floor counted in units. The device has
+        # no prices and cannot tell: the screen is neutral, never "You
+        # receive", and shows the NFT given.
+        title, body = self._settlement(_paid(
+            MAINNET[0], (1, DCN, "1000000", SIGNER)))[0]
+        self.assertEqual((title, body),
+                         _screen([], GIVEN, "1000000 DCN"))
+        for word in ("fair", "price", "safe", "value"):
+            self.assertNotIn(word, body)
 
     def test_a_dutch_auction_counts_its_smaller_amount(self):
         # Starts at 0.55 ETH, ends at 1 wei: the order can settle for 1 wei.
         self.assertEqual(self._settlement(_paid(
             MAINNET[0], (0, ZERO, "553407831900000000", SIGNER, "1"))),
-            [("WARNING", DUST + "1 Wei")])
+            [_screen([_under("0.0001 ETH")], GIVEN, "1 Wei")])
 
     def test_an_nft_item_naming_weth_is_not_weth(self):
         # Seaport moves an ERC-721 item by its identifier (1 wei here),
@@ -408,7 +511,7 @@ class TestMsgEthereumErc7730Settlement(Erc7730Harness, common.KeepKeyTest):
         # coin of the firmware's table.
         self.assertEqual(self._settlement(_paid(
             MAINNET[0], (2, WETH, "1", SIGNER, "1", "1"))),
-            [("WARNING", COIN_WETH + DUST + "NFT ID 1\n" + WETH)])
+            [_screen([COIN_WETH, UNKNOWN], GIVEN, "NFT ID 1\n" + WETH)])
 
     def _amounts(self, pages):
         return [body for _, body in pages
@@ -417,14 +520,13 @@ class TestMsgEthereumErc7730Settlement(Erc7730Harness, common.KeepKeyTest):
     def test_items_are_shown_as_seaport_moves_them(self):
         # Offer items marked like payments: every amount reads by its item
         # type. An NFT is its identifier and count, never an amount of its
-        # token; coins keep their token amount.
+        # token; coins keep their token amount. Two NFTs given are listed on
+        # the last screen, a third is counted.
         doc = _paid(MAINNET[0], (0, ZERO, "19740000000000000", SIGNER),
                     (1, WETH, "210000000000000", OPENSEA_FEE),
                     (3, NFT, "4", SIGNER, "4", "7"))
-        doc["message"]["offer"] = [
-            {"itemType": t, "token": NFT, "identifierOrCriteria": i,
-             "startAmount": a, "endAmount": a}
-            for t, i, a in ((2, "446", "1"), (3, "650", "2"), (5, "9", "7"))]
+        doc = self._with_offer(doc, (2, NFT, "446", "1"), (3, NFT, "650", "2"),
+                               (5, NFT, "9", "7"))
         pages = self._sign(doc, seaport_descriptor())
         shown = []
         for label, value in (
@@ -436,33 +538,55 @@ class TestMsgEthereumErc7730Settlement(Erc7730Harness, common.KeepKeyTest):
             shown += ["%s amount:\n%s" % (label, value),
                       "%s end amount:\n%s" % (label, value)]
         self.assertEqual(self._amounts(pages), shown)
-        self.assertIn(("You receive", "0.01974 ETH\n4 of NFT ID 7\n" + NFT),
-                      pages)
+        self.assertEqual(self._settlement_of(pages), [_screen(
+            [], "NFT ID 446\n%s\n2 of NFT ID 650\n%s\n+ 1 more NFT" % (NFT, NFT),
+            "0.01974 ETH\n4 of NFT ID 7\n" + NFT)])
 
     def test_a_given_nft_naming_weth_warns(self):
         # The drain an amount screen hid: this wallet "gives" an ERC-721 by
         # criteria (any identifier) whose token is WETH. Seaport would move
         # the identifier the filler picks as wei of WETH, up to the whole
         # balance. The order may even pay this wallet.
-        doc = copy.deepcopy(MAINNET[0])
-        doc["message"]["offer"] = [
-            {"itemType": 4, "token": WETH, "identifierOrCriteria": "0",
-             "startAmount": "1", "endAmount": "1"}]
+        doc = self._with_offer(MAINNET[0], (4, WETH, "0", "1"))
         pages = self._sign(doc, seaport_descriptor())
         self.assertEqual(self._amounts(pages)[:2], [
             "Give amount:\n1 NFT by criteria\n" + WETH,
             "Give end amount:\n1 NFT by criteria\n" + WETH])
-        self.assertIn(
-            ("WARNING", COIN_WETH + "You receive:\n0.5534078319 ETH"), pages)
+        self.assertEqual(self._settlement_of(pages), [_screen(
+            [COIN_WETH], "1 NFT by criteria\n" + WETH, "0.5534078319 ETH")])
         # The ERC-721 variant (50 WETH as an identifier), nothing paid back.
-        doc = _paid(MAINNET[0], (0, ZERO, "1", STRANGER))
-        doc["message"]["offer"] = [
-            {"itemType": 2, "token": WETH,
-             "identifierOrCriteria": "50000000000000000000",
-             "startAmount": "1", "endAmount": "1"}]
+        doc = self._with_offer(_paid(MAINNET[0], (0, ZERO, "1", STRANGER)),
+                               (2, WETH, "50000000000000000000", "1"))
         self.assertEqual(
             self._settlement(doc, seaport_descriptor()),
-            [("WARNING", COIN_WETH + NOTHING[1])])
+            [_screen([COIN_WETH, NOTHING],
+                     "NFT ID 50000000000000000000\n" + WETH, "Nothing")])
+
+    def test_an_erc721_naming_an_unlisted_token_warns(self):
+        # Review r1: an ERC-721 item naming an ERC-20 the table does not
+        # list (USDe) moves "ID" units of it: 10,000 USDe as NFT ID 10^22
+        # for 0.01 ETH. An ID of 2^64 or more warns; the item is shown by its
+        # raw contract and ID.
+        doc = self._with_offer(
+            _paid(MAINNET[0], (0, ZERO, "10000000000000000", SIGNER)),
+            (2, USDE, "10000000000000000000000", "1"))
+        self.assertEqual(self._settlement(doc), [_screen(
+            [LARGE_ID], "NFT ID 10000000000000000000000\n" + USDE,
+            "0.01 ETH")])
+        # Control: an ID that fits 64 bits reads as any NFT (Desktop checks
+        # the contract before the device).
+        doc = self._with_offer(doc, (2, USDE, "18446744073709551615", "1"))
+        self.assertEqual(self._settlement(doc), [_screen(
+            [], "NFT ID 18446744073709551615\n" + USDE, "0.01 ETH")])
+
+    def test_an_nft_item_naming_the_native_placeholder_says_what_it_is(self):
+        # Review r1: it read "names the token ETH: Seaport moves its ID as an
+        # amount of ETH". 0xEeee...EEeE is no contract.
+        doc = self._with_offer(MAINNET[0], (2, EEEE, "7", "1"))
+        self.assertEqual(self._settlement(doc), [_screen(
+            ["An NFT item names 0xEeee...EEeE, the native coin's placeholder: "
+             "it is not an NFT contract."],
+            "NFT ID 7\n" + EEEE, "0.5534078319 ETH")])
 
     def test_a_given_erc20_naming_an_nft_collection_warns(self):
         # The mirror of the drain above: this wallet "gives" an ERC-20 item
@@ -470,26 +594,29 @@ class TestMsgEthereumErc7730Settlement(Erc7730Harness, common.KeepKeyTest):
         # ID. Seaport's transferFrom(from, to, 1234) moves NFT #1234. The
         # amount reads as an unknown token, and the last screen warns, even
         # with a real payment back.
-        doc = _paid(MAINNET[0], (0, ZERO, "1000000000000000", SIGNER))
-        doc["message"]["offer"] = [
-            {"itemType": 1, "token": NFT, "identifierOrCriteria": "0",
-             "startAmount": "1234", "endAmount": "1234"}]
+        doc = self._with_offer(
+            _paid(MAINNET[0], (0, ZERO, "1000000000000000", SIGNER)),
+            (1, NFT, "0", "1234"))
         pages = self._sign(doc, seaport_descriptor())
         self.assertEqual(self._amounts(pages)[:2], [
             "Give amount:\n1234\nunknown token\n" + NFT,
             "Give end amount:\n1234\nunknown token\n" + NFT])
-        self.assertIn(
-            ("WARNING", GIVES_UNKNOWN + "You receive:\n0.001 ETH"), pages)
-        # Control: the same order giving WETH, a token the table lists.
-        doc["message"]["offer"][0]["token"] = WETH
+        self.assertEqual(self._settlement_of(pages), [_screen(
+            [GIVES_UNKNOWN], "1234\nunknown token\n" + NFT, "0.001 ETH")])
+        # Control: the same order giving WETH, a token the table lists. It
+        # nets against the ETH paid back.
+        doc = self._with_offer(doc, (1, WETH, "0", "1234"))
         self.assertEqual(
             self._settlement(doc, seaport_descriptor()),
-            [("You receive", "0.001 ETH")])
+            [_screen([], "0.000000000000001234 WETH",
+                     "0.000999999999998766 ETH")])
 
     def test_one_base_unit_of_usdc_is_dust(self):
-        # A millionth of one USDC is one base unit: dust, like 1 wei.
-        for amount, shown in (("1", ("WARNING", DUST + "0.000001 USDC")),
-                              ("10000", ("You receive", "0.01 USDC"))):
+        # A millionth of one USDC is one base unit: under the floor, like
+        # 1 wei.
+        for amount, shown in (
+                ("1", _screen([_under("0.01 USDC")], GIVEN, "0.000001 USDC")),
+                ("10000", _screen([], GIVEN, "0.01 USDC"))):
             with self.subTest(amount=amount):
                 self.assertEqual(self._settlement(_paid(
                     MAINNET[0], (1, USDC, amount, SIGNER),
@@ -502,7 +629,7 @@ class TestMsgEthereumErc7730Settlement(Erc7730Harness, common.KeepKeyTest):
         doc = MAINNET[1]
         described = self._sign(doc)
         without = self._sign(doc, seaport_descriptor(roles=False))
-        added = ("You receive", "0.01974 ETH")
+        added = _screen([], _given(doc), "0.01974 ETH")
         self.assertEqual(len(described), len(without) + 1)
         changed = [(a, b) for a, b in zip(
             [p for p in described if p != added], without) if a != b]
@@ -514,29 +641,25 @@ class TestMsgEthereumErc7730Settlement(Erc7730Harness, common.KeepKeyTest):
             "Give amount:\n1\nunknown token\n" + nft,
             "Give end amount:\n1\nunknown token\n" + nft])
 
-    def test_a_listing_paid_in_weth_is_calm(self):
+    def test_a_listing_paid_in_weth_shows_both_sides(self):
         self.assertEqual(self._settlement(_paid(
             MAINNET[0], (1, WETH, "500000000000000000", SIGNER),
             (1, WETH, "5000000000000000", OPENSEA_FEE),
             (1, WETH, "1000000000000000", CREATOR))),
-            [("You receive", "0.5 WETH")])
+            [_screen([], GIVEN, "0.5 WETH")])
 
     def test_an_offer_for_an_nft_warns(self):
         # A collection offer: this wallet gives WETH for any NFT of a
         # collection. The device cannot value an NFT, so it says so.
-        doc = _paid(MAINNET[0], (4, LISTING["message"]["offer"][0]["token"],
-                                 "1", SIGNER, "1", "0"),
-                    (1, WETH, "2500000000000000", OPENSEA_FEE))
-        doc["message"]["offer"] = [
-            {"itemType": 1, "token": WETH, "identifierOrCriteria": "0",
-             "startAmount": "500000000000000000",
-             "endAmount": "500000000000000000"}]
-        self.assertEqual(self._settlement(doc), [(
-            "WARNING", DUST + "1 NFT by criteria\n" +
-            LISTING["message"]["offer"][0]["token"])])
+        doc = self._with_offer(
+            _paid(MAINNET[0], (4, NFT, "1", SIGNER, "1", "0"),
+                  (1, WETH, "2500000000000000", OPENSEA_FEE)),
+            (1, WETH, "0", "500000000000000000"))
+        self.assertEqual(self._settlement(doc), [_screen(
+            [UNKNOWN], "0.5 WETH", "1 NFT by criteria\n" + NFT)])
 
     def test_declining_the_settlement_screen_aborts(self):
-        for doc, title in ((MAINNET[1], "You receive"),
+        for doc, title in ((MAINNET[1], SUMMARY),
                            (_paid(MAINNET[0], (0, ZERO, "1", STRANGER)),
                             "WARNING")):
             with self.subTest(title=title):
@@ -555,23 +678,30 @@ class TestMsgEthereumErc7730Settlement(Erc7730Harness, common.KeepKeyTest):
             {"itemType": 1, "token": WETH, "identifierOrCriteria": "0",
              "startAmount": "2000000000000000000",
              "endAmount": "2000000000000000000"})
-        self.assertEqual(self._settlement(doc), [
-            ("WARNING", "This wallet gets back no more than it gives.")])
+        given = GIVEN + "\n2 WETH"
+        self.assertEqual(self._settlement(doc),
+                         [_screen([BACK], given, "Nothing")])
+        # Review r1: the same drain paid back in ETH (the filler unwraps the
+        # WETH it takes). WETH and ETH net as one coin.
+        self.assertEqual(
+            self._settlement(_paid(doc, (0, ZERO, "2000000000000000000",
+                                         SIGNER))),
+            [_screen([BACK], given, "Nothing")])
         # More back than given: the difference.
         more = _paid(doc, (1, WETH, "3000000000000000000", SIGNER))
-        self.assertEqual(self._settlement(more), [("You receive", "1 WETH")])
-        # Control: the same payment for the NFT alone is a price.
+        self.assertEqual(self._settlement(more),
+                         [_screen([], given, "1 WETH")])
+        # Control: the same payment for the NFT alone.
         self.assertEqual(self._settlement(_paid(
             MAINNET[0], (1, WETH, "2000000000000000000", SIGNER))),
-            [("You receive", "2 WETH")])
+            [_screen([], GIVEN, "2 WETH")])
 
     def test_an_erc20_item_naming_the_native_placeholder_is_not_eth(self):
         # 0xEeee...EEeE is the token table's mainnet "ETH" sentinel, not an
         # ERC-20 (Seaport would revert): never counted as ETH.
         self.assertEqual(self._settlement(_paid(
-            MAINNET[0], (1, "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE",
-                         "1000000000000000000", SIGNER))),
-            [("WARNING", DUST + "+ items not listed here")])
+            MAINNET[0], (1, EEEE, "1000000000000000000", SIGNER))),
+            [_screen([UNKNOWN], GIVEN, "+ items not listed here")])
 
     def test_without_the_opt_in_nothing_is_added(self):
         # Control: the same phishing order under the definition without
