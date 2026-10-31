@@ -110,7 +110,9 @@ class Erc7730Harness(object):
         calldata_passes = 0
         calldata_offset = 0
         typed_passes = 0
-        for _ in range(1000):
+        # A safety bound, not a budget: a typed-data iteration (Seaport) walks
+        # the message once per item field, a few thousand messages in all.
+        for _ in range(20000):
             if isinstance(response, proto.ButtonRequest):
                 buttons += 1
                 self.button_codes.append(response.code)
