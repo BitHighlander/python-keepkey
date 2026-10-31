@@ -76,6 +76,9 @@ WETH = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
 WORTHLESS = "0x1111111111111111111111111111111111111111"
 USDC = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
 USDE = "0x4c9EDD5852cd905f086C759E8383e09bff1E68B3"
+STETH = "0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84"  # not in the table
+APE = "0x4d224452801ACEd8B2F0aebE155379bb5D594381"  # not in the table
+UD = "0x049aba7510f45BA5b64ea9E658E342F904DB358D"  # Unstoppable Domains
 DCN = "0x08d32b0da63e2C3bcF8019c9c5d849d7a9d791e6"
 EEEE = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"
 CONDUIT = "0x0000007b02230091a7ed01230072f7006a004d60a8d4e71d599b8104250f0000"
@@ -292,6 +295,9 @@ NFT = LISTING["message"]["offer"][0]["token"]
 GIVES_UNKNOWN = ("This wallet gives a token the device does not know: if it "
                  "is an NFT collection, Seaport moves the NFT whose ID is the "
                  "amount.")
+CRITERIA = ("This wallet gives an item by criteria: the buyer picks its ID "
+            "(on a token, the ID is an amount).")
+MORE_ITEMS = "This wallet gives more items than this screen lists."
 
 
 def _under(coin):
@@ -521,7 +527,8 @@ class TestMsgEthereumErc7730Settlement(Erc7730Harness, common.KeepKeyTest):
         # Offer items marked like payments: every amount reads by its item
         # type. An NFT is its identifier and count, never an amount of its
         # token; coins keep their token amount. Two NFTs given are listed on
-        # the last screen, a third is counted.
+        # the last screen, a third is counted and warns (review r2), as does
+        # giving one by criteria.
         doc = _paid(MAINNET[0], (0, ZERO, "19740000000000000", SIGNER),
                     (1, WETH, "210000000000000", OPENSEA_FEE),
                     (3, NFT, "4", SIGNER, "4", "7"))
@@ -539,7 +546,8 @@ class TestMsgEthereumErc7730Settlement(Erc7730Harness, common.KeepKeyTest):
                       "%s end amount:\n%s" % (label, value)]
         self.assertEqual(self._amounts(pages), shown)
         self.assertEqual(self._settlement_of(pages), [_screen(
-            [], "NFT ID 446\n%s\n2 of NFT ID 650\n%s\n+ 1 more NFT" % (NFT, NFT),
+            [CRITERIA, MORE_ITEMS],
+            "NFT ID 446\n%s\n2 of NFT ID 650\n%s\n+ 1 more NFT" % (NFT, NFT),
             "0.01974 ETH\n4 of NFT ID 7\n" + NFT)])
 
     def test_a_given_nft_naming_weth_warns(self):
@@ -553,7 +561,8 @@ class TestMsgEthereumErc7730Settlement(Erc7730Harness, common.KeepKeyTest):
             "Give amount:\n1 NFT by criteria\n" + WETH,
             "Give end amount:\n1 NFT by criteria\n" + WETH])
         self.assertEqual(self._settlement_of(pages), [_screen(
-            [COIN_WETH], "1 NFT by criteria\n" + WETH, "0.5534078319 ETH")])
+            [COIN_WETH, CRITERIA], "1 NFT by criteria\n" + WETH,
+            "0.5534078319 ETH")])
         # The ERC-721 variant (50 WETH as an identifier), nothing paid back.
         doc = self._with_offer(_paid(MAINNET[0], (0, ZERO, "1", STRANGER)),
                                (2, WETH, "50000000000000000000", "1"))
@@ -578,6 +587,58 @@ class TestMsgEthereumErc7730Settlement(Erc7730Harness, common.KeepKeyTest):
         doc = self._with_offer(doc, (2, USDE, "18446744073709551615", "1"))
         self.assertEqual(self._settlement(doc), [_screen(
             [], "NFT ID 18446744073709551615\n" + USDE, "0.01 ETH")])
+
+    def test_giving_by_criteria_warns(self):
+        # Review r2: an item given by criteria names no ID. Seaport takes the
+        # one the filler supplies: with a zero root any, otherwise any in the
+        # tree. On an ERC-20 the table does not list (stETH, APE) that is
+        # transferFrom(this wallet, filler, any amount); on a real collection
+        # the filler picks which NFT. Each read calm on 3dea32ef7.
+        paid = _paid(MAINNET[0], (0, ZERO, "10000000000000000", SIGNER))
+        for token, root in ((STETH, "0"),
+                            (APE, "12345678901234567890123456789"),
+                            (NFT, "0")):
+            with self.subTest(token=token):
+                self.assertEqual(
+                    self._settlement(self._with_offer(paid, (4, token, root,
+                                                             "1"))),
+                    [_screen([CRITERIA], "1 NFT by criteria\n" + token,
+                             "0.01 ETH")])
+        # Control: the same collection by ID.
+        self.assertEqual(
+            self._settlement(self._with_offer(paid, (2, NFT, "7", "1"))),
+            [_screen([], "NFT ID 7\n" + NFT, "0.01 ETH")])
+
+    def test_nfts_past_the_list_warn(self):
+        # Review r2: past the two NFTs listed, the rest were only counted, so
+        # an ERC-721 item naming stETH (ID 1000, under 2^64) read calm as
+        # "+ 2 more NFTs".
+        paid = _paid(MAINNET[0], (0, ZERO, "10000000000000000", SIGNER))
+        two = "NFT ID 1\n%s\nNFT ID 2\n%s" % (NFT, NFT)
+        doc = self._with_offer(paid, (2, NFT, "1", "1"), (2, NFT, "2", "1"),
+                               (2, NFT, "3", "1"), (2, STETH, "1000", "1"))
+        self.assertEqual(self._settlement(doc), [_screen(
+            [MORE_ITEMS], two + "\n+ 2 more NFTs", "0.01 ETH")])
+        # Control: two NFTs, both listed.
+        self.assertEqual(self._settlement(self._with_offer(
+            paid, (2, NFT, "1", "1"), (2, NFT, "2", "1"))),
+            [_screen([], two, "0.01 ETH")])
+
+    def test_unstoppable_domains_ids_are_hashes(self):
+        # Review r2: Unstoppable Domains' ERC-721 on Ethereum uses namehash
+        # IDs, like ENS: a real listing must not read "2^64 or more".
+        name = ("538974463791641374324267330513076226333073735129812319168380"
+                "13234372094094706")
+        paid = _paid(MAINNET[0], (0, ZERO, "50000000000000000", SIGNER),
+                     (0, ZERO, "1250000000000000", OPENSEA_FEE))
+        self.assertEqual(
+            self._settlement(self._with_offer(paid, (2, UD, name, "1"))),
+            [_screen([], "NFT ID %s\n%s" % (name, UD), "0.05 ETH")])
+        # Control: the same ID at a contract the device does not know.
+        self.assertEqual(
+            self._settlement(self._with_offer(paid, (2, STETH, name, "1"))),
+            [_screen([LARGE_ID], "NFT ID %s\n%s" % (name, STETH),
+                     "0.05 ETH")])
 
     def test_an_nft_item_naming_the_native_placeholder_says_what_it_is(self):
         # Review r1: it read "names the token ETH: Seaport moves its ID as an
