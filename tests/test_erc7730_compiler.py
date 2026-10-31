@@ -13,7 +13,8 @@ import semver
 import common
 
 from keepkeylib.erc7730_compiler import (
-    DEVICE_CAPABILITIES, HEADER_SIZE, DeviceCannotExecute, compile_calldata,
+    DEVICE_CAPABILITIES, HEADER_SIZE, SETTLE_FLAGS, SETTLEMENT,
+    DeviceCannotExecute, compile_calldata,
     compile_eip712,
     device_refusal, eip712_encode_type, load_descriptor,
     parse_function_signature,
@@ -706,6 +707,110 @@ def test_mirror_refuses_the_header_flags_the_device_refuses():
         _firmware_validate(flagged(calldata, flags), refusal)
     _firmware_validate(typed)
     _firmware_validate(flagged(typed, 1), refusal)
+
+
+def _formatter_flags_offset(program, index):
+    """Where formatter `index`'s flags byte sits in `program`."""
+    offset = HEADER_SIZE
+    for _ in range(program[178]):
+        kind = program[offset]
+        length = struct.unpack(">I", program[offset + 1:offset + 5])[0]
+        if kind == 6:
+            at = offset + 5 + 2
+            for _ in range(index):
+                at += 3 + 4 * program[at + 2]
+            return at + 1
+        offset += 5 + length
+    raise AssertionError("no formatter table")
+
+
+def test_717_settlement_roles_are_a_typed_data_opt_in():
+    # Each field may name its role in an order ("settlement": give, type,
+    # id, amount, to); any role sets header flag SETTLEMENT, which only typed
+    # data may carry, and the device then shows what the signer receives.
+    _requires_firmware("7.17.0")
+    reported = common.device_capabilities()
+    if reported is not None and "erc7730-typed-settlement" not in reported:
+        pytest.skip("Staged release tree does not yet provide capability: "
+                    "erc7730-typed-settlement")
+    typed = {
+        "types": {
+            "EIP712Domain": [{"name": "chainId", "type": "uint256"},
+                             {"name": "verifyingContract", "type": "address"}],
+            "Item": [{"name": "kind", "type": "uint8"},
+                     {"name": "token", "type": "address"},
+                     {"name": "id", "type": "uint256"},
+                     {"name": "amount", "type": "uint256"},
+                     {"name": "to", "type": "address"}],
+            "Order": [{"name": "give", "type": "Item[]"},
+                      {"name": "get", "type": "Item[]"}]},
+        "primaryType": "Order",
+        "domain": {"chainId": 1, "verifyingContract": "0x" + "11" * 20},
+        "message": {"give": [], "get": []}}
+
+    def descriptor(roles=True, amount_role="amount", give_kind="raw"):
+        role = lambda name, params=None: dict(
+            params or {}, **({"settlement": name} if roles else {}))
+        amount = {"path": "amount", "label": "Amount",
+                  "format": "tokenAmount",
+                  "params": role(amount_role, {"tokenPath": "token"})}
+        return {"metadata": {"enums": {"kind": {"0": "Coin", "1": "Token"}}},
+                "display": {"formats": {"Order(": {
+                    "intent": "Order", "fields": [
+                        {"path": "give.[]", "label": "Give", "fields": [
+                            {"path": "kind", "label": "Kind",
+                             "format": give_kind,
+                             "params": role("give", {
+                                 "$ref": "$.metadata.enums.kind"}
+                                 if give_kind == "enum" else {})}]},
+                        {"path": "get.[]", "label": "Get", "fields": [
+                            {"path": "kind", "label": "Kind",
+                             "format": "enum", "params": role("type", {
+                                 "$ref": "$.metadata.enums.kind"})},
+                            {"path": "id", "label": "Id", "format": "raw",
+                             "params": role("id")},
+                            amount,
+                            {"path": "to", "label": "To",
+                             "format": "addressName",
+                             "params": role("to", {"recipient": True})}]}]}}}}
+
+    program = compile_eip712(descriptor(), typed)
+    assert program[6] == SETTLEMENT
+    # One formatter per field, in field order; "to" keeps RECIPIENT.
+    flags = [program[_formatter_flags_offset(program, i)] for i in range(5)]
+    assert flags == [SETTLE_FLAGS["give"], SETTLE_FLAGS["type"],
+                     SETTLE_FLAGS["id"], SETTLE_FLAGS["amount"],
+                     SETTLE_FLAGS["to"] | 1]
+    _firmware_validate(program)
+    _firmware_validate(compile_eip712(descriptor(give_kind="enum"), typed))
+    # No role, no flag: the program is the 7.17 one.
+    plain = compile_eip712(descriptor(roles=False), typed)
+    assert plain[6] == 0
+    _firmware_validate(plain)
+    # A role the kind cannot hold, or an unknown role, does not compile.
+    with pytest.raises(ValueError, match="settlement id does not apply"):
+        compile_eip712(descriptor(amount_role="id"), typed)
+    with pytest.raises(ValueError, match="unknown settlement role"):
+        compile_eip712(descriptor(amount_role="price"), typed)
+    # Calldata never settles.
+    with pytest.raises(ValueError, match="settlement applies to typed data"):
+        compile_calldata({"display": {"formats": {"f(uint256 a)": {
+            "intent": "F", "fields": [{"path": "a", "label": "A",
+                                       "format": "raw",
+                                       "params": {"settlement": "id"}}]}}}},
+            "f(uint256 a)", 1, "0x" + "11" * 20)
+    # The device refuses a role without the header flag, and two roles on one
+    # field; the mirror says why.
+    refusal = "a settlement role needs the header flag, one per field"
+    _firmware_validate(program[:6] + bytes([0]) + program[7:], refusal)
+    two = bytearray(program)
+    two[_formatter_flags_offset(program, 1)] |= SETTLE_FLAGS["give"]
+    _firmware_validate(bytes(two), refusal)
+    # A device without the settlement review refuses the flag.
+    capabilities = dict(DEVICE_CAPABILITIES)
+    del capabilities["settlement"]
+    assert device_refusal(program, capabilities) == (
+        "settlement is not executed")
 
 
 def test_mirror_applies_the_devices_abi_and_text_limits():

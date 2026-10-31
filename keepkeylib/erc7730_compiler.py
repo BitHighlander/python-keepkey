@@ -806,6 +806,19 @@ class CalldataCompiler(object):
                     raise ValueError(
                         "equalsTxValue applies to a calldata amount")
                 flags |= FORMATTER_FLAG_TX_VALUE
+            # KeepKey 7.17 "settlement": the field's role in an order, so
+            # the device can say what the signer receives (typed data only;
+            # erc7730_settle.h).
+            role = params.get("settlement")
+            if role is not None:
+                if self.definition_kind != 2:
+                    raise ValueError("settlement applies to typed data")
+                if role not in SETTLE_FLAGS:
+                    raise ValueError("unknown settlement role %r" % (role,))
+                if not SETTLE_FLAGS[role] & _settle_kinds(kind):
+                    raise ValueError("settlement %s does not apply to %s" % (
+                        role, field.get("format")))
+                flags |= SETTLE_FLAGS[role]
             formatter_index = len(formatters)
             formatters.append((kind, arguments, flags))
             condition = ABSENT
@@ -989,8 +1002,11 @@ class CalldataCompiler(object):
                                              if _ != 1)).digest()
         selector = (keccak256(canonical_signature.encode("ascii"))[:4] + bytes(28)
                     if self.definition_kind == 1 else self.primary_type_hash)
-        header = (b"C773" + bytes([1, 2, TRAILING_DATA if self.trailing_data
-                                   else 0, self.definition_kind]) + _u16(0) +
+        program_flags = (TRAILING_DATA if self.trailing_data else 0) | (
+            SETTLEMENT if any(f[2] & FORMATTER_FLAGS_SETTLE
+                              for f in formatters) else 0)
+        header = (b"C773" + bytes([1, 2, program_flags,
+                                   self.definition_kind]) + _u16(0) +
                   _u64(self.chain_id) + self.address + selector +
                   hashlib.sha256(source).digest() + COMPILER_ID + token_hash +
                   _u32(self.provider_id) + _u32(self.issuance_epoch) +
@@ -1001,11 +1017,23 @@ class CalldataCompiler(object):
                                  for kind, value in sections)
 
 
-# Program header byte 6 (ERC7730_PROGRAM_FLAG_TRAILING_DATA).
+# Program header byte 6 (ERC7730_PROGRAM_FLAG_*): TRAILING_DATA for calldata,
+# SETTLEMENT (7.17) for typed data whose fields carry a settlement role.
 TRAILING_DATA = 1
+SETTLEMENT = 2
 # Formatter entry byte 1 (ERC7730_FORMATTER_FLAG_*, firmware 7.17).
 FORMATTER_FLAG_RECIPIENT = 1
 FORMATTER_FLAG_TX_VALUE = 2
+# "settlement" roles, one per field: an item given away, or the type,
+# identifier, amount or recipient of an item paid out.
+SETTLE_FLAGS = {"give": 4, "type": 8, "id": 16, "amount": 32, "to": 64}
+FORMATTER_FLAGS_SETTLE = 0x7c
+
+
+def _settle_kinds(kind):
+    """The settlement flags formatter `kind` may carry."""
+    return {1: 4 | 8 | 16, 3: 4 | 32, 8: 4 | 8, 10: 4 | 64,
+            13: 0}.get(kind, 4)
 
 
 # What the device executes: a mirror of keepkey-firmware's
@@ -1055,6 +1083,10 @@ DEVICE_CAPABILITIES = {
     # amount TX_VALUE (calldata only)
     "formatter_flags": {10: FORMATTER_FLAG_RECIPIENT,
                         2: FORMATTER_FLAG_TX_VALUE},
+    # 7.17: typed data may opt in to the settlement review (header flag
+    # SETTLEMENT) and mark each field's role in the order; widens
+    # formatter_flags by _settle_kinds()
+    "settlement": True,
     # 7.17: an embedded call in an iteration may name one callee, value or
     # authority (a scalar) for every element
     "embedded_scalar_arguments": True,
@@ -1161,11 +1193,16 @@ def _abi_walk(nodes, steps):
 
 def device_refusal(program, capabilities=DEVICE_CAPABILITIES):
     """Why the device would refuse `program` at preload, or None."""
-    # Header byte 6 holds flags: TRAILING_DATA alone, for calldata alone.
-    if program[6] & ~TRAILING_DATA or (program[6] and program[7] != 1):
+    # Header byte 6 holds flags: TRAILING_DATA for calldata, SETTLEMENT for
+    # typed data.
+    allowed = {1: TRAILING_DATA, 2: SETTLEMENT}.get(program[7], 0)
+    if program[6] & ~allowed:
         return "program header flags are not executed"
-    if program[6] and not capabilities.get("trailing_data"):
+    if program[6] & TRAILING_DATA and not capabilities.get("trailing_data"):
         return "trailing data is not executed"
+    settlement = bool(program[6] & SETTLEMENT)
+    if settlement and not capabilities.get("settlement"):
+        return "settlement is not executed"
     sections = _program_sections(program)
     u16 = lambda data, at: struct.unpack(">H", data[at:at + 2])[0]
 
@@ -1297,8 +1334,14 @@ def device_refusal(program, capabilities=DEVICE_CAPABILITIES):
         at += 3
         if kind not in capabilities["formatters"]:
             return "formatter kind %d is not executed" % kind
-        if flags & ~capabilities.get("formatter_flags", {}).get(kind, 0):
+        allowed_flags = capabilities.get("formatter_flags", {}).get(kind, 0)
+        if capabilities.get("settlement"):
+            allowed_flags |= _settle_kinds(kind)
+        if flags & ~allowed_flags:
             return "formatter kind %d flags are not executed" % kind
+        settle = flags & FORMATTER_FLAGS_SETTLE
+        if settle and (not settlement or settle & (settle - 1)):
+            return "a settlement role needs the header flag, one per field"
         if flags & FORMATTER_FLAG_TX_VALUE and not calldata:
             return "a value check applies to calldata"
         roles, required = capabilities["formatters"][kind]
