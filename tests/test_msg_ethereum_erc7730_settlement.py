@@ -24,7 +24,13 @@ moves an ERC-721 item by its identifier whatever its token is. An NFT item
 naming a coin of the firmware's table (an ERC-721 "WETH" moves its identifier
 in wei of WETH) makes the last screen a warning. Offer items may carry the
 same type, identifier and amount roles as payments; with no recipient they
-count as given.
+count as given. The other way round, Seaport moves an ERC-20 item with
+transferFrom(from, to, amount), which an ERC-721 answers too: an ERC-20 item
+naming an NFT collection gives the NFT whose ID is the amount. So giving an
+ERC-20 the table does not list on the chain makes the last screen a warning.
+
+Dust is counted in units, not value: under a millionth of one coin, or under
+a hundredth of one for six decimals or fewer (one base unit of USDC is dust).
 
 Wallets compared (2026-10): Ledger and Trezor show the typed-data fields and
 have no on-device rule over who is paid in a Seaport order; Blockaid
@@ -57,6 +63,7 @@ SIGNER = "0x9858EfFD232B4033E47d90003D41EC34EcaEda94"
 STRANGER = "0x00000000000000000000000000000000DeaDBeef"
 WETH = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
 WORTHLESS = "0x1111111111111111111111111111111111111111"
+USDC = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
 CONDUIT = "0x0000007b02230091a7ed01230072f7006a004d60a8d4e71d599b8104250f0000"
 SELLER = "seller"  # the real offerer: this wallet in every test
 
@@ -267,6 +274,9 @@ NOTHING = ("WARNING", "Nothing in this order is paid to this wallet.")
 COIN_WETH = ("An NFT item names the token WETH: Seaport moves its ID as an "
              "amount of WETH.\n")
 NFT = LISTING["message"]["offer"][0]["token"]
+GIVES_UNKNOWN = ("This wallet gives a token the device does not know: if it "
+                 "is an NFT collection, Seaport moves the NFT whose ID is the "
+                 "amount.\n")
 
 
 def _native(amount, chain):
@@ -464,6 +474,37 @@ class TestMsgEthereumErc7730Settlement(Erc7730Harness, common.KeepKeyTest):
         self.assertEqual(
             self._settlement(doc, seaport_descriptor(described=True)),
             [("WARNING", COIN_WETH + NOTHING[1])])
+
+    def test_a_given_erc20_naming_an_nft_collection_warns(self):
+        # The mirror of the drain above: this wallet "gives" an ERC-20 item
+        # whose token is the listing's own NFT collection, amount = a token
+        # ID. Seaport's transferFrom(from, to, 1234) moves NFT #1234. The
+        # amount reads as an unknown token, and the last screen warns, even
+        # with a real payment back.
+        doc = _paid(MAINNET[0], (0, ZERO, "1000000000000000", SIGNER))
+        doc["message"]["offer"] = [
+            {"itemType": 1, "token": NFT, "identifierOrCriteria": "0",
+             "startAmount": "1234", "endAmount": "1234"}]
+        pages = self._sign(doc, seaport_descriptor(described=True))
+        self.assertEqual(self._amounts(pages)[:2], [
+            "Give amount:\n1234\nunknown token\n" + NFT,
+            "Give end amount:\n1234\nunknown token\n" + NFT])
+        self.assertIn(
+            ("WARNING", GIVES_UNKNOWN + "You receive:\n0.001 ETH"), pages)
+        # Control: the same order giving WETH, a token the table lists.
+        doc["message"]["offer"][0]["token"] = WETH
+        self.assertEqual(
+            self._settlement(doc, seaport_descriptor(described=True)),
+            [("You receive", "0.001 ETH")])
+
+    def test_one_base_unit_of_usdc_is_dust(self):
+        # A millionth of one USDC is one base unit: dust, like 1 wei.
+        for amount, shown in (("1", ("WARNING", DUST + "0.000001 USDC")),
+                              ("10000", ("You receive", "0.01 USDC"))):
+            with self.subTest(amount=amount):
+                self.assertEqual(self._settlement(_paid(
+                    MAINNET[0], (1, USDC, amount, SIGNER),
+                    (0, ZERO, "5589978100000000", OPENSEA_FEE))), [shown])
 
     def test_described_offer_items_are_given(self):
         # Offer items with a type and no recipient count as given: 1 wei
