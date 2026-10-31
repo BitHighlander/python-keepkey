@@ -101,6 +101,35 @@ HASHED_ID = [
      "4198952414451092601333812763749611905246708960792447852956960428300143"
      "1130114"),
 ]
+# Review r4: the hashed-ID list from real data. The eight chain-1 ERC-721s
+# with the most Seaport 1.6 listings moving IDs of 2^64 or more over blocks
+# 26263701-26313700, each read on chain; each ID is one a real listing sold
+# (~/keepkey-audit-rigs batch6 sources/hashed-ids-from-fills-6d.json).
+HASHED_ID_R4 = [
+    ("0x20262e3433306a4FF250a64d20a8E0F09B2C7F68",  # ENS Commemorative
+     "4800339746304215113505442909383013170834154924283749081808552991793306"
+     "7218499"),
+    ("0x0bfa9AFF76FD91756F837Ab47e11BD99e04C15bD",  # Unetwork Operator Software License
+     "4576591384459525819354822824087780623876878923053159931781766556648552"
+     "9869688"),
+    ("0x572E33FFa523865791aB1C26B42a86aC244Df784",  # Gucci
+     "340282366920938542673693659940582850561"),
+    ("0x51bd5948CF84a1041d2720F56DEd5e173396FC95",  # Zer0 Name Service
+     "7956835364388832789985426334073616726165905345450434453319174395065344"
+     "2050388"),
+    ("0x05F81F870cBca79E9171f22886b58b5597A603AA",  # Zer0 Name Service
+     "1889289441097877424889029978620228441072846434811872990092939913119975"
+     "2586985"),
+    ("0x741512954Cb6f8e5d3cD9321c07462b05B7cC8D5",  # OKX AI NFT
+     "4894621097800733791606173110553506964654181500179553434699681112865701"
+     "7831425"),
+    ("0xc2e9678A71e50E5AEd036e00e9c5caeb1aC5987D",  # Zero Name Service
+     "5804190919614418592259370525208415466303453209166590916760934043604458"
+     "3769244"),
+    ("0xc9154424B823b10579895cCBE442d41b9Abd96Ed",  # Rarible
+     "2826039867819840215306711511831437299585336968281979299548049622915281"
+     "322105"),
+]
 # Chain-1 ERC-20s the table does not list that the firmware names as never an
 # NFT (review r3): symbol, contract.
 NEVER_NFT = [
@@ -691,6 +720,20 @@ class TestMsgEthereumErc7730Settlement(Erc7730Harness, common.KeepKeyTest):
                     [_screen([], "NFT ID %s\n%s" % (name, token),
                              "0.05 ETH")])
 
+    def test_hashed_id_collections_from_real_fills_are_calm(self):
+        # Review r4: the r3 list was hand-picked; real listings of these
+        # collections (ENS Commemorative first, 315 in the window) read "An
+        # NFT ID is 2^64 or more".
+        paid = _paid(MAINNET[0], (0, ZERO, "50000000000000000", SIGNER),
+                     (0, ZERO, "1250000000000000", OPENSEA_FEE))
+        for token, name in HASHED_ID_R4:
+            with self.subTest(token=token):
+                self.assertEqual(
+                    self._settlement(self._with_offer(paid,
+                                                      (2, token, name, "1"))),
+                    [_screen([], "NFT ID %s\n%s" % (name, token),
+                             "0.05 ETH")])
+
     def test_never_an_nft_tokens_warn(self):
         # Review r3: an ERC-721 item naming an ERC-20 the table does not
         # list, with an ID under 2^64, read as an NFT; for a 6- or 8-decimal
@@ -714,6 +757,13 @@ class TestMsgEthereumErc7730Settlement(Erc7730Harness, common.KeepKeyTest):
             ["An NFT item names 0xEeee...EEeE, the native coin's placeholder: "
              "it is not an NFT contract."],
             "NFT ID 7\n" + EEEE, "0.5534078319 ETH")])
+        # Review r4: an ID of 2^64 or more adds no 2^64 line (the table
+        # answers 0xEeee as ETH on chain 1, like any coin it lists).
+        doc = self._with_offer(MAINNET[0], (2, EEEE, str(1 << 64), "1"))
+        self.assertEqual(self._settlement(doc), [_screen(
+            ["An NFT item names 0xEeee...EEeE, the native coin's placeholder: "
+             "it is not an NFT contract."],
+            "NFT ID %d\n%s" % (1 << 64, EEEE), "0.5534078319 ETH")])
 
     def test_a_given_erc20_naming_an_nft_collection_warns(self):
         # The mirror of the drain above: this wallet "gives" an ERC-20 item
