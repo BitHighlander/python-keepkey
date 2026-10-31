@@ -8,29 +8,34 @@ Seaport definition every such order signed under "Verified by KeepKey" with
 the same calm screens as a real listing.
 
 A typed-data definition may now opt in to a settlement review: it marks the
-field of each item the order gives away ("settlement": "give") and the type,
-identifier, amounts and recipient of each item it pays out ("type", "id",
-"amount", "to"). The device keeps what is paid to the signing address it
-derives itself and, after the definition's last field, shows it on a screen
-the definition cannot change or skip: "You receive" with the totals, or
-"WARNING" when this wallet receives nothing, or only unknown tokens, NFTs or
-dust for what it gives. What is signed never changes, and every value is
-still shown exactly once.
+type, identifier and amounts of every item of the order, and the recipient
+of each item it pays out ("settlement": "type", "id", "amount", "to"); an
+item without a recipient is one the order gives away. The device keeps what
+is paid to the signing address it derives itself, and what is given, and
+after the definition's last field shows what this wallet receives net of
+what it gives of the same item, on a screen the definition cannot change or
+skip: "You receive" with the totals, or "WARNING" when this wallet receives
+nothing net, only unknown tokens, NFTs or dust for what it gives, or gives
+an item the device could not read. What is signed never changes, and every
+value is still shown exactly once.
 
 An item whose type is marked is also shown as Seaport moves it: an NFT
 item's amount reads as its identifier and count ("NFT ID 446", "2 of NFT ID
 650", "1 NFT by criteria"), never as an amount of its token, because Seaport
 moves an ERC-721 item by its identifier whatever its token is. An NFT item
 naming a coin of the firmware's table (an ERC-721 "WETH" moves its identifier
-in wei of WETH) makes the last screen a warning. Offer items may carry the
-same type, identifier and amount roles as payments; with no recipient they
-count as given. The other way round, Seaport moves an ERC-20 item with
-transferFrom(from, to, amount), which an ERC-721 answers too: an ERC-20 item
-naming an NFT collection gives the NFT whose ID is the amount. So giving an
-ERC-20 the table does not list on the chain makes the last screen a warning.
+in wei of WETH) makes the last screen a warning. The other way round,
+Seaport moves an ERC-20 item with transferFrom(from, to, amount), which an
+ERC-721 answers too: an ERC-20 item naming an NFT collection gives the NFT
+whose ID is the amount. So giving an ERC-20 the table does not list on the
+chain makes the last screen a warning.
 
 Dust is counted in units, not value: under a millionth of one coin, or under
 a hundredth of one for six decimals or fewer (one base unit of USDC is dust).
+
+On the certified tier ("Verified by KeepKey") the firmware refuses a Seaport
+OrderComponents definition without the settlement review (firmware unit
+test); these tests sign on the runtime tier, which is not bound.
 
 Wallets compared (2026-10): Ledger and Trezor show the typed-data fields and
 have no on-device rule over who is paid in a Seaport order; Blockaid
@@ -158,29 +163,27 @@ def _role(roles, name, params=None):
     return params
 
 
-def _item_fields(prefix, roles, give, described):
-    """Seaport item fields, as batch 6-D's definition shows them. An offer
-    item carries one "give", or with `described` the type, identifier and
-    amount roles a payment carries (it has no recipient, so it is given)."""
-    item_roles = roles and (described or not give)
-
+def _item_fields(prefix, roles):
+    """Seaport item fields, as batch 6-D's definition shows them; with
+    `roles`, the type, identifier and amounts are marked (an offer item has
+    no recipient, so it is given)."""
     def amount(path, label):
         return {"path": path, "label": label, "format": "tokenAmount",
-                "params": _role(item_roles, "amount", {
+                "params": _role(roles, "amount", {
                     "tokenPath": "token", "nativeCurrencyAddress": [ZERO]})}
     return [
         {"path": "itemType", "label": prefix + " type", "format": "enum",
-         "params": _role(roles, "type" if item_roles else "give",
+         "params": _role(roles, "type",
                          {"$ref": "$.metadata.enums.itemType"})},
         {"path": "identifierOrCriteria", "label": prefix + " ID/criteria",
-         "format": "raw", "params": _role(item_roles, "id")},
+         "format": "raw", "params": _role(roles, "id")},
         amount("startAmount", prefix + " amount"),
         amount("endAmount", prefix + " end amount")]
 
 
-def seaport_descriptor(roles=True, described=False):
+def seaport_descriptor(roles=True):
     """The Seaport 1.6 OrderComponents definition; with `roles`, its fields
-    carry their settlement roles (with `described`, offer items too)."""
+    carry their settlement roles."""
     return {
         "metadata": {"owner": "OpenSea", "enums": {
             "itemType": {"0": "Native coin", "1": "ERC-20",
@@ -196,10 +199,9 @@ def seaport_descriptor(roles=True, described=False):
                 {"path": "offerer", "label": "Offerer",
                  "format": "addressName"},
                 {"path": "offer.[]", "label": "You give",
-                 "fields": _item_fields("Give", roles, True, described)},
+                 "fields": _item_fields("Give", roles)},
                 {"path": "consideration.[]", "label": "Paid out",
-                 "fields": _item_fields("Payment", roles, False,
-                                        described) + [
+                 "fields": _item_fields("Payment", roles) + [
                      {"path": "recipient", "label": "Paid to",
                       "format": "addressName",
                       "params": _role(roles, "to", {"recipient": True})}]},
@@ -366,19 +368,6 @@ class TestMsgEthereumErc7730Settlement(Erc7730Harness, common.KeepKeyTest):
                               salt=message["salt"][-8:]):
                 self.assertEqual(self._settlement(order), [_expected(order)])
 
-    def test_every_value_is_still_shown_once(self):
-        # The roles add one screen and change nothing else: the same pages,
-        # in the same order, as the same definition without roles.
-        doc = MAINNET[1]
-        with_roles = self._sign(doc)
-        without = self._sign(doc, seaport_descriptor(roles=False))
-        added = ("You receive", "0.01974 ETH")
-        self.assertIn(added, with_roles)
-        self.assertNotIn(added, without)
-        self.assertEqual([p for p in with_roles if p != added], without)
-        self.assertEqual(
-            [t for t, _ in with_roles if t == "EIP-712 Message"], [])
-
     def test_one_wei_to_a_stranger_warns(self):
         self.assertEqual(self._settlement(
             _paid(MAINNET[0], (0, ZERO, "1", STRANGER))), [NOTHING])
@@ -436,7 +425,7 @@ class TestMsgEthereumErc7730Settlement(Erc7730Harness, common.KeepKeyTest):
             {"itemType": t, "token": NFT, "identifierOrCriteria": i,
              "startAmount": a, "endAmount": a}
             for t, i, a in ((2, "446", "1"), (3, "650", "2"), (5, "9", "7"))]
-        pages = self._sign(doc, seaport_descriptor(described=True))
+        pages = self._sign(doc, seaport_descriptor())
         shown = []
         for label, value in (
                 ("Give", "NFT ID 446\n" + NFT),
@@ -459,7 +448,7 @@ class TestMsgEthereumErc7730Settlement(Erc7730Harness, common.KeepKeyTest):
         doc["message"]["offer"] = [
             {"itemType": 4, "token": WETH, "identifierOrCriteria": "0",
              "startAmount": "1", "endAmount": "1"}]
-        pages = self._sign(doc, seaport_descriptor(described=True))
+        pages = self._sign(doc, seaport_descriptor())
         self.assertEqual(self._amounts(pages)[:2], [
             "Give amount:\n1 NFT by criteria\n" + WETH,
             "Give end amount:\n1 NFT by criteria\n" + WETH])
@@ -472,7 +461,7 @@ class TestMsgEthereumErc7730Settlement(Erc7730Harness, common.KeepKeyTest):
              "identifierOrCriteria": "50000000000000000000",
              "startAmount": "1", "endAmount": "1"}]
         self.assertEqual(
-            self._settlement(doc, seaport_descriptor(described=True)),
+            self._settlement(doc, seaport_descriptor()),
             [("WARNING", COIN_WETH + NOTHING[1])])
 
     def test_a_given_erc20_naming_an_nft_collection_warns(self):
@@ -485,7 +474,7 @@ class TestMsgEthereumErc7730Settlement(Erc7730Harness, common.KeepKeyTest):
         doc["message"]["offer"] = [
             {"itemType": 1, "token": NFT, "identifierOrCriteria": "0",
              "startAmount": "1234", "endAmount": "1234"}]
-        pages = self._sign(doc, seaport_descriptor(described=True))
+        pages = self._sign(doc, seaport_descriptor())
         self.assertEqual(self._amounts(pages)[:2], [
             "Give amount:\n1234\nunknown token\n" + NFT,
             "Give end amount:\n1234\nunknown token\n" + NFT])
@@ -494,7 +483,7 @@ class TestMsgEthereumErc7730Settlement(Erc7730Harness, common.KeepKeyTest):
         # Control: the same order giving WETH, a token the table lists.
         doc["message"]["offer"][0]["token"] = WETH
         self.assertEqual(
-            self._settlement(doc, seaport_descriptor(described=True)),
+            self._settlement(doc, seaport_descriptor()),
             [("You receive", "0.001 ETH")])
 
     def test_one_base_unit_of_usdc_is_dust(self):
@@ -506,20 +495,12 @@ class TestMsgEthereumErc7730Settlement(Erc7730Harness, common.KeepKeyTest):
                     MAINNET[0], (1, USDC, amount, SIGNER),
                     (0, ZERO, "5589978100000000", OPENSEA_FEE))), [shown])
 
-    def test_described_offer_items_are_given(self):
-        # Offer items with a type and no recipient count as given: 1 wei
-        # back warns, as with "give".
-        self.assertEqual(self._settlement(
-            _paid(MAINNET[0], (0, ZERO, "1", SIGNER)),
-            seaport_descriptor(described=True)),
-            [("WARNING", DUST + "1 Wei")])
-
-    def test_described_offer_items_change_only_their_amounts(self):
-        # Show-once with every item described: the same pages as the
-        # definition without roles, but for the NFT's two amount pages (its
-        # identifier, not "1 unknown token") and the added screen.
+    def test_every_value_is_still_shown_once(self):
+        # The same pages as the definition without roles, but for the NFT's
+        # two amount pages (its identifier, not "1 unknown token") and the
+        # added screen.
         doc = MAINNET[1]
-        described = self._sign(doc, seaport_descriptor(described=True))
+        described = self._sign(doc)
         without = self._sign(doc, seaport_descriptor(roles=False))
         added = ("You receive", "0.01974 ETH")
         self.assertEqual(len(described), len(without) + 1)
@@ -565,9 +546,38 @@ class TestMsgEthereumErc7730Settlement(Erc7730Harness, common.KeepKeyTest):
                                "Signing cancelled by user")
                 self.assertEqual(screens[-1][0], title)
 
+    def test_what_is_paid_back_from_what_is_given_is_not_received(self):
+        # The re-review's drain: this wallet gives its NFT and 2 WETH and is
+        # "paid" the same 2 WETH. The filler flash-loans that payment, fills
+        # it before the offer, and keeps the NFT: the wallet gets nothing.
+        doc = _paid(MAINNET[0], (1, WETH, "2000000000000000000", SIGNER))
+        doc["message"]["offer"].append(
+            {"itemType": 1, "token": WETH, "identifierOrCriteria": "0",
+             "startAmount": "2000000000000000000",
+             "endAmount": "2000000000000000000"})
+        self.assertEqual(self._settlement(doc), [
+            ("WARNING", "This wallet gets back no more than it gives.")])
+        # More back than given: the difference.
+        more = _paid(doc, (1, WETH, "3000000000000000000", SIGNER))
+        self.assertEqual(self._settlement(more), [("You receive", "1 WETH")])
+        # Control: the same payment for the NFT alone is a price.
+        self.assertEqual(self._settlement(_paid(
+            MAINNET[0], (1, WETH, "2000000000000000000", SIGNER))),
+            [("You receive", "2 WETH")])
+
+    def test_an_erc20_item_naming_the_native_placeholder_is_not_eth(self):
+        # 0xEeee...EEeE is the token table's mainnet "ETH" sentinel, not an
+        # ERC-20 (Seaport would revert): never counted as ETH.
+        self.assertEqual(self._settlement(_paid(
+            MAINNET[0], (1, "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE",
+                         "1000000000000000000", SIGNER))),
+            [("WARNING", DUST + "+ items not listed here")])
+
     def test_without_the_opt_in_nothing_is_added(self):
         # Control: the same phishing order under the definition without
-        # roles signs with no settlement screen, as 7.17 did before.
+        # roles signs with no settlement screen, as 7.17 did before. This is
+        # the runtime tier; a certified Seaport definition without roles is
+        # refused (firmware unit test).
         self.assertEqual(self._settlement(
             _paid(MAINNET[0], (0, ZERO, "1", STRANGER)),
             seaport_descriptor(roles=False)), [])

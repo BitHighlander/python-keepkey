@@ -1024,16 +1024,16 @@ SETTLEMENT = 2
 # Formatter entry byte 1 (ERC7730_FORMATTER_FLAG_*, firmware 7.17).
 FORMATTER_FLAG_RECIPIENT = 1
 FORMATTER_FLAG_TX_VALUE = 2
-# "settlement" roles, one per field: an item given away, or the type,
-# identifier, amount or recipient of an item paid out.
-SETTLE_FLAGS = {"give": 4, "type": 8, "id": 16, "amount": 32, "to": 64}
-FORMATTER_FLAGS_SETTLE = 0x7c
+# "settlement" roles, one per field: the type, identifier, amount or
+# recipient of an item of the order. An item without a recipient is given
+# away, and is read like a payment (the device nets one against the other).
+SETTLE_FLAGS = {"type": 8, "id": 16, "amount": 32, "to": 64}
+FORMATTER_FLAGS_SETTLE = 0x78
 
 
 def _settle_kinds(kind):
     """The settlement flags formatter `kind` may carry."""
-    return {1: 4 | 8 | 16, 3: 4 | 32, 8: 4 | 8, 10: 4 | 64,
-            13: 0}.get(kind, 4)
+    return {1: 8 | 16, 3: 32, 8: 8, 10: 64}.get(kind, 0)
 
 
 # What the device executes: a mirror of keepkey-firmware's

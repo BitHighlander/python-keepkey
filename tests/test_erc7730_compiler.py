@@ -725,9 +725,10 @@ def _formatter_flags_offset(program, index):
 
 
 def test_717_settlement_roles_are_a_typed_data_opt_in():
-    # Each field may name its role in an order ("settlement": give, type,
-    # id, amount, to); any role sets header flag SETTLEMENT, which only typed
-    # data may carry, and the device then shows what the signer receives.
+    # Each field may name its role in an order ("settlement": type, id,
+    # amount, to; an item without "to" is given); any role sets header flag
+    # SETTLEMENT, which only typed data may carry, and the device then shows
+    # what the signer receives, net of what it gives.
     _requires_firmware("7.17.0")
     reported = common.device_capabilities()
     if reported is not None and "erc7730-typed-settlement" not in reported:
@@ -760,7 +761,7 @@ def test_717_settlement_roles_are_a_typed_data_opt_in():
                         {"path": "give.[]", "label": "Give", "fields": [
                             {"path": "kind", "label": "Kind",
                              "format": give_kind,
-                             "params": role("give", {
+                             "params": role("type", {
                                  "$ref": "$.metadata.enums.kind"}
                                  if give_kind == "enum" else {})}]},
                         {"path": "get.[]", "label": "Get", "fields": [
@@ -778,7 +779,7 @@ def test_717_settlement_roles_are_a_typed_data_opt_in():
     assert program[6] == SETTLEMENT
     # One formatter per field, in field order; "to" keeps RECIPIENT.
     flags = [program[_formatter_flags_offset(program, i)] for i in range(5)]
-    assert flags == [SETTLE_FLAGS["give"], SETTLE_FLAGS["type"],
+    assert flags == [SETTLE_FLAGS["type"], SETTLE_FLAGS["type"],
                      SETTLE_FLAGS["id"], SETTLE_FLAGS["amount"],
                      SETTLE_FLAGS["to"] | 1]
     _firmware_validate(program)
@@ -792,6 +793,10 @@ def test_717_settlement_roles_are_a_typed_data_opt_in():
         compile_eip712(descriptor(amount_role="id"), typed)
     with pytest.raises(ValueError, match="unknown settlement role"):
         compile_eip712(descriptor(amount_role="price"), typed)
+    # "give" is no role: an item without a recipient is given, and the device
+    # must read it to net it.
+    with pytest.raises(ValueError, match="unknown settlement role"):
+        compile_eip712(descriptor(amount_role="give"), typed)
     # Calldata never settles.
     with pytest.raises(ValueError, match="settlement applies to typed data"):
         compile_calldata({"display": {"formats": {"f(uint256 a)": {
@@ -804,8 +809,12 @@ def test_717_settlement_roles_are_a_typed_data_opt_in():
     refusal = "a settlement role needs the header flag, one per field"
     _firmware_validate(program[:6] + bytes([0]) + program[7:], refusal)
     two = bytearray(program)
-    two[_formatter_flags_offset(program, 1)] |= SETTLE_FLAGS["give"]
+    two[_formatter_flags_offset(program, 2)] |= SETTLE_FLAGS["type"]
     _firmware_validate(bytes(two), refusal)
+    # Flag 4 (an earlier draft's "give") is no flag on any kind.
+    four = bytearray(program)
+    four[_formatter_flags_offset(program, 0)] = 4
+    _firmware_validate(bytes(four), "formatter kind 1 flags are not executed")
     # A device without the settlement review refuses the flag.
     capabilities = dict(DEVICE_CAPABILITIES)
     del capabilities["settlement"]
