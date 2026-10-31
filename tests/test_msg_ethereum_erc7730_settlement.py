@@ -78,6 +78,41 @@ USDC = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
 USDE = "0x4c9EDD5852cd905f086C759E8383e09bff1E68B3"
 STETH = "0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84"  # not in the table
 APE = "0x4d224452801ACEd8B2F0aebE155379bb5D594381"  # not in the table
+# ERC-20s the table does not list, and no firmware list names (review r3).
+LDO = "0x5A98FcBEA516Cf06857215779Fd812CA3beF1B32"
+RETH = "0xae78736Cd615f374D3085123A210448E74Fc6393"
+# Chain-1 ERC-721s whose live IDs are hashes or packed (review r3; each ID
+# moved on chain, ~/keepkey-audit-rigs batch6
+# sources/hashed-ids-onchain-6d.json).
+HASHED_ID = [
+    ("0xD1E5b0FF1287aA9f9A268759062E4Ab08b9Dacbe",  # Unstoppable .crypto
+     "2640479375954687368405108873679577913755247171701477055198822272924474"
+     "546773"),
+    ("0xF87E31492Faf9A91B02Ee0dEAAd50d51d56D5d4d",  # Decentraland LAND
+     "1157920892373161954235709850086879078505477257302730563317505871484589"
+     "83948410"),
+    ("0x2A187453064356c898cAe034EAed119E1663ACb8",  # Decentraland Names
+     "1104886426554971316873225178934451429952489820850483521117029452396656"
+     "89743296"),
+    ("0x629A673A8242c2AC4B7B8C5D8735fbeac21A6205",  # Sorare
+     "8486410100290593993614660320003782926703175571181795977402868013196166"
+     "933584"),
+    ("0xF6793dA657495ffeFF9Ee6350824910Abc21356C",  # Rarible
+     "4198952414451092601333812763749611905246708960792447852956960428300143"
+     "1130114"),
+]
+# Chain-1 ERC-20s the table does not list that the firmware names as never an
+# NFT (review r3): symbol, contract.
+NEVER_NFT = [
+    ("cbBTC", "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf"),
+    ("PYUSD", "0x6c3ea9036406852006290770BEdFcAbA0e23A0e8"),
+    ("XAUt", "0x68749665FF8D2d112Fa859AA293F07A622782F38"),
+    ("EURC", "0x1aBaEA1f7C830bD89Acc67eC4af516284b1bC33c"),
+    ("stETH", STETH),
+    ("wstETH", "0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0"),
+    ("USDe", USDE),
+    ("APE", APE),
+]
 UD = "0x049aba7510f45BA5b64ea9E658E342F904DB358D"  # Unstoppable Domains
 DCN = "0x08d32b0da63e2C3bcF8019c9c5d849d7a9d791e6"
 EEEE = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"
@@ -573,30 +608,32 @@ class TestMsgEthereumErc7730Settlement(Erc7730Harness, common.KeepKeyTest):
 
     def test_an_erc721_naming_an_unlisted_token_warns(self):
         # Review r1: an ERC-721 item naming an ERC-20 the table does not
-        # list (USDe) moves "ID" units of it: 10,000 USDe as NFT ID 10^22
-        # for 0.01 ETH. An ID of 2^64 or more warns; the item is shown by its
-        # raw contract and ID.
+        # list moves "ID" units of it: 10,000 LDO as NFT ID 10^22 for 0.01
+        # ETH (the review used USDe, which the firmware now names: see
+        # test_never_an_nft_tokens_warn). An ID of 2^64 or more warns; the
+        # item is shown by its raw contract and ID.
         doc = self._with_offer(
             _paid(MAINNET[0], (0, ZERO, "10000000000000000", SIGNER)),
-            (2, USDE, "10000000000000000000000", "1"))
+            (2, LDO, "10000000000000000000000", "1"))
         self.assertEqual(self._settlement(doc), [_screen(
-            [LARGE_ID], "NFT ID 10000000000000000000000\n" + USDE,
+            [LARGE_ID], "NFT ID 10000000000000000000000\n" + LDO,
             "0.01 ETH")])
         # Control: an ID that fits 64 bits reads as any NFT (Desktop checks
         # the contract before the device).
-        doc = self._with_offer(doc, (2, USDE, "18446744073709551615", "1"))
+        doc = self._with_offer(doc, (2, LDO, "18446744073709551615", "1"))
         self.assertEqual(self._settlement(doc), [_screen(
-            [], "NFT ID 18446744073709551615\n" + USDE, "0.01 ETH")])
+            [], "NFT ID 18446744073709551615\n" + LDO, "0.01 ETH")])
 
     def test_giving_by_criteria_warns(self):
         # Review r2: an item given by criteria names no ID. Seaport takes the
         # one the filler supplies: with a zero root any, otherwise any in the
-        # tree. On an ERC-20 the table does not list (stETH, APE) that is
+        # tree. On an ERC-20 the table does not list (the review's stETH and
+        # APE, now named by the firmware; LDO, rETH) that is
         # transferFrom(this wallet, filler, any amount); on a real collection
         # the filler picks which NFT. Each read calm on 3dea32ef7.
         paid = _paid(MAINNET[0], (0, ZERO, "10000000000000000", SIGNER))
-        for token, root in ((STETH, "0"),
-                            (APE, "12345678901234567890123456789"),
+        for token, root in ((LDO, "0"),
+                            (RETH, "12345678901234567890123456789"),
                             (NFT, "0")):
             with self.subTest(token=token):
                 self.assertEqual(
@@ -611,12 +648,12 @@ class TestMsgEthereumErc7730Settlement(Erc7730Harness, common.KeepKeyTest):
 
     def test_nfts_past_the_list_warn(self):
         # Review r2: past the two NFTs listed, the rest were only counted, so
-        # an ERC-721 item naming stETH (ID 1000, under 2^64) read calm as
-        # "+ 2 more NFTs".
+        # an ERC-721 item naming an unlisted ERC-20 (LDO, ID 1000, under
+        # 2^64) read calm as "+ 2 more NFTs".
         paid = _paid(MAINNET[0], (0, ZERO, "10000000000000000", SIGNER))
         two = "NFT ID 1\n%s\nNFT ID 2\n%s" % (NFT, NFT)
         doc = self._with_offer(paid, (2, NFT, "1", "1"), (2, NFT, "2", "1"),
-                               (2, NFT, "3", "1"), (2, STETH, "1000", "1"))
+                               (2, NFT, "3", "1"), (2, LDO, "1000", "1"))
         self.assertEqual(self._settlement(doc), [_screen(
             [MORE_ITEMS], two + "\n+ 2 more NFTs", "0.01 ETH")])
         # Control: two NFTs, both listed.
@@ -636,9 +673,38 @@ class TestMsgEthereumErc7730Settlement(Erc7730Harness, common.KeepKeyTest):
             [_screen([], "NFT ID %s\n%s" % (name, UD), "0.05 ETH")])
         # Control: the same ID at a contract the device does not know.
         self.assertEqual(
-            self._settlement(self._with_offer(paid, (2, STETH, name, "1"))),
-            [_screen([LARGE_ID], "NFT ID %s\n%s" % (name, STETH),
+            self._settlement(self._with_offer(paid, (2, LDO, name, "1"))),
+            [_screen([LARGE_ID], "NFT ID %s\n%s" % (name, LDO),
                      "0.05 ETH")])
+
+    def test_hashed_id_collections_are_calm(self):
+        # Review r3: real chain-1 listings of Decentraland LAND and Names,
+        # Unstoppable .crypto, Sorare and Rarible read "An NFT ID is 2^64 or
+        # more" (their IDs are hashes or packed coordinates).
+        paid = _paid(MAINNET[0], (0, ZERO, "50000000000000000", SIGNER),
+                     (0, ZERO, "1250000000000000", OPENSEA_FEE))
+        for token, name in HASHED_ID:
+            with self.subTest(token=token):
+                self.assertEqual(
+                    self._settlement(self._with_offer(paid,
+                                                      (2, token, name, "1"))),
+                    [_screen([], "NFT ID %s\n%s" % (name, token),
+                             "0.05 ETH")])
+
+    def test_never_an_nft_tokens_warn(self):
+        # Review r3: an ERC-721 item naming an ERC-20 the table does not
+        # list, with an ID under 2^64, read as an NFT; for a 6- or 8-decimal
+        # token that is any amount (1000 PYUSD is NFT ID 10^9). The ERC-20s
+        # an NFT item is most likely to name that way warn like a table coin.
+        paid = _paid(MAINNET[0], (0, ZERO, "10000000000000000", SIGNER))
+        for ticker, token in NEVER_NFT:
+            with self.subTest(token=ticker):
+                self.assertEqual(
+                    self._settlement(self._with_offer(
+                        paid, (2, token, "1000000000", "1"))),
+                    [_screen(["An NFT item names the token %s: Seaport moves "
+                              "its ID as an amount of %s." % (ticker, ticker)],
+                             "NFT ID 1000000000\n" + token, "0.01 ETH")])
 
     def test_an_nft_item_naming_the_native_placeholder_says_what_it_is(self):
         # Review r1: it read "names the token ETH: Seaport moves its ID as an
