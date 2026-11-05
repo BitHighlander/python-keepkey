@@ -97,7 +97,7 @@ class Erc7730Harness(object):
 
     def _walk(self, start, envelope=b"", doc=None, change_pass=None, cancel_button=None,
               arguments=None, catalog=None, altered=None, cancel_title=None,
-              chunk_size=None):
+              chunk_size=None, typed_altered=None, max_steps=20000):
         response = self.client.call_raw(start)
         self.definition_requests = 0
         self.button_codes = []
@@ -112,7 +112,7 @@ class Erc7730Harness(object):
         typed_passes = 0
         # A safety bound, not a budget: a typed-data iteration (Seaport) walks
         # the message once per item field, a few thousand messages in all.
-        for _ in range(20000):
+        for _ in range(max_steps):
             if isinstance(response, proto.ButtonRequest):
                 buttons += 1
                 self.button_codes.append(response.code)
@@ -144,11 +144,10 @@ class Erc7730Harness(object):
                 current = copy.deepcopy(doc)
                 if change_pass == typed_passes:
                     current["message"]["first"] += 1
-                resolved = eip712_stream.resolve_member_path(current, path)
-                value = (eip712_stream.encode_array_length(resolved[1])
-                         if resolved[0] == "length" else
-                         eip712_stream.encode_value(resolved[1], resolved[2]))
-                response = self.client.call_raw(eth.EthereumTypedDataValueAck(value=value))
+                if typed_altered:
+                    typed_altered(current, typed_passes, path)
+                response = self.client.call_raw(eip712_stream.value_ack(
+                    current, response, chunked=True))
             elif isinstance(response, eth.EthereumTxRequest) and response.HasField("data_length"):
                 if calldata_offset == 0:
                     calldata_passes += 1
