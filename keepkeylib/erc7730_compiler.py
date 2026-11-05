@@ -1391,8 +1391,9 @@ def device_refusal(program, capabilities=DEVICE_CAPABILITIES):
             seen.add(role)
         if not required <= seen:
             return "formatter kind %d lacks a required argument" % kind
-        if kind == 13 and not calldata:
-            return "embedded calldata is executed for calldata only"
+        if kind == 13 and not calldata and program[38:70] != bytes.fromhex(
+                "bb8310d486368db6bd6f849402fdd73ad53d316b5a4b2644ad6efe0f941286d8"):
+            return "typed embedded calldata requires canonical SafeTx"
         formatter_arrays.append((value_array, any_array, mixed_arrays,
                                  kind == 13, value_literal))
 
