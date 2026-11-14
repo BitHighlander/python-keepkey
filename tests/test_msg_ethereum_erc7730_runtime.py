@@ -977,10 +977,14 @@ class TestMsgEthereumErc7730Runtime(Erc7730Harness, common.KeepKeyTest):
                 "intent": "Approve NFT", "fields": fields}}}},
             self.NFT_APPROVE, 1, self.USDC)
 
-    def test_certified_nft_approve_of_a_high_token_id_is_not_unlimited(self):
-        # ERC-721 approve(to, tokenId) shares approve()'s selector. Shown
-        # only as an nftName token id, the second word grants one token, so
-        # an ENS-style hashed id of 2^255 or more is no UNLIMITED allowance.
+    def test_runtime_nft_approve_of_a_high_token_id_still_warns_unlimited(self):
+        # ERC-721 approve(to, tokenId) shares approve()'s selector. Only a
+        # KeepKey-certified definition may say the second word is a token id
+        # and so not an UNLIMITED allowance: the device cannot tell an ERC-721
+        # contract from an ERC-20 one. This runtime signer's definition is
+        # annotation only, so an ENS-style id of 2^255 or more still gets the
+        # device's UNLIMITED warning first (the certified exemption is pinned
+        # by the firmware unit test Erc7730Workflow.TokenIdExemption...).
         self.requires_firmware("7.17.0")
         operator = {"path": "to", "label": "Operator", "format": "addressName"}
         token = {"path": "tokenId", "label": "Token", "format": "nftName",
@@ -989,7 +993,7 @@ class TestMsgEthereumErc7730Runtime(Erc7730Harness, common.KeepKeyTest):
         arguments = self._word(OTHER_ADDRESS) + self._word(token_id)
         shown = self._allowance_signed(self._nft_approve([operator, token]),
                                        arguments)
-        self.assertNotIn("UNLIMITED approval", [s[0] for s in shown])
+        self.assertEqual(shown[0], self.UNLIMITED)
         self.assertEqual(
             [s for s in shown if s[0] in ("Contract action", "Signer field")], [
                 ("Contract action", "Approve NFT"),
