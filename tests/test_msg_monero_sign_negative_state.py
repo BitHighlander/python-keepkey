@@ -431,6 +431,44 @@ class TestMsgMoneroSignNegativeState(neg.SignFlow):
         attempt(lambda s: False, SYNTAX, neg.REQUEST)  # no source at all
         self.signs(neg.plan(2))
 
+    def test_additional_key_must_be_the_outputs_own(self):
+        output = neg.paid_subaddress_output(1, 1, 2)
+
+        def attempt(change, code=None, text=None):
+            p = neg.signtx.plan(neg.PAYEE, False, [(output, 10 ** 12)])
+            src = p['sources'][0]
+            src.real_out_additional_key = output['additional']
+            change(src)
+            self.reach(p, 'init')
+            response = self.call(monero_proto.MoneroTxSetInputRequest(src=src))
+            if code is None:
+                self.assertIsInstance(response,
+                                      monero_proto.MoneroTxSetInputAck)
+                return p
+            self.ends(response, code, text)
+
+        # The control: with its own additional key the output is spendable,
+        # and the session signs.
+        p = attempt(lambda s: None)
+        f = self.finish(self.reach(p, 'signed'))
+        self.assertEqual(len(f['clsags'][0]), 18 * 32)
+        # Without it, or under another index of that transaction, it is not.
+        attempt(lambda s: s.ClearField('real_out_additional_key'), OTHER,
+                neg.NOT_OWNED)
+        for index in (0, 1, 3, 16, 2 ** 32 - 1):
+            attempt(lambda s: setattr(s, 'real_output_in_tx_index', index),
+                    OTHER, neg.NOT_OWNED)
+        # The additional key of another output.
+        attempt(lambda s: setattr(
+            s, 'real_out_additional_key',
+            neg.paid_subaddress_output(2, 1, 2)['additional']), OTHER,
+            neg.NOT_OWNED)
+        attempt(lambda s: setattr(s, 'sub_minor', 2), OTHER, neg.NOT_OWNED)
+        attempt(lambda s: setattr(
+            s, 'real_out_additional_key',
+            neg.torsioned(s.real_out_additional_key)), SYNTAX, neg.POINT)
+        self.signs()
+
     def test_input_keys_outside_the_group(self):
         attempt = self.attempt_input
         valid = neg.signtx.point(b'additional', 1)

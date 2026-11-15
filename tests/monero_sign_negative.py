@@ -187,6 +187,22 @@ def paid_output(tag, index=0):
             'output_public': xmr._encode(key).hex()}
 
 
+def paid_subaddress_output(tag, minor, index):
+    """An output paid to the wallet's subaddress (0, minor) by a transaction
+    with several recipients: its key comes from the additional transaction
+    key at its own index ('additional'), not from the main one."""
+    spend, view = own_subaddress(0, minor)
+    r = signtx.scalar(b'additional', tag)
+    derivation = xmr._encode(xmr._mul(xmr._decode(view), 8 * r))
+    key = xmr._add(
+        xmr._mul(xmr.G, signtx.hs(derivation + xmr.varint(index))),
+        xmr._decode(spend))
+    return {'major': 0, 'minor': minor, 'index': index,
+            'tx_public': signtx.point(b'main', tag).hex(),
+            'additional': xmr._encode(xmr._mul(xmr._decode(spend), r)),
+            'output_public': xmr._encode(key).hex()}
+
+
 def plan(inputs=1, payee=PAYEE, subaddress=False, change_first=False):
     """The honest plan the attacks start from: `inputs` owned outputs, one
     recipient, change to the wallet's primary address. The first two inputs
