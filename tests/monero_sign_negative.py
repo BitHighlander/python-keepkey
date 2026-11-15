@@ -318,6 +318,8 @@ class SignFlow(common.KeepKeyTest):
                 answer = answers[min(len(pages), len(answers) - 1)]
                 if watch:
                     layout = self.client._read_oled_after_settle()
+                    # Into the screenshot report, when one is being made.
+                    self.client._capture_oled(layout)
                     title, body = self.client.debug.read_confirm_text()
                     pages.append((response.code, title, body, layout))
                 else:
