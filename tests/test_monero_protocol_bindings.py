@@ -1,7 +1,8 @@
 """Monero wire schema (device-protocol messages-monero.proto).
 
-The binding tests need no device. The device test checks that firmware which
-does not report monero-signing refuses every Monero request cleanly.
+The binding tests need no device. The device tests check that firmware
+refuses what it does not implement: signing without monero-signing, every
+Monero request in bitcoin-only builds and before 7.17.0.
 """
 
 import unittest
@@ -70,18 +71,33 @@ class TestMoneroProtocolBindings(unittest.TestCase):
 
 class TestMoneroWithoutSigner(common.KeepKeyTest):
 
-    def test_requests_are_refused_without_the_capability(self):
-        reported = self.firmware_capabilities()
-        if reported is not None and 'monero-signing' in reported:
-            self.skipTest('Firmware implements Monero signing')
+    def refuse(self, names):
         self.setup_mnemonic_nopin_nopassphrase()
-        for wire_id, name in sorted(MONERO_WIRE_IDS.items()):
-            if not name.startswith('MoneroGet') and not name.endswith('Request'):
-                continue  # responses are never sent to the device
+        for name in names:
             with self.subTest(name):
                 response = self.client.call_raw(getattr(monero_proto, name)())
                 self.assertIsInstance(response, proto.Failure)
                 self.assertEqual(response.code, proto_types.Failure_UnexpectedMessage)
+
+    def test_signing_requests_are_refused_without_the_capability(self):
+        # Full firmware answers the receive requests (1800-1809) as of 7.17.0;
+        # signing is refused until the firmware reports the capability.
+        reported = self.firmware_capabilities()
+        if reported is not None and 'monero-signing' in reported:
+            self.skipTest('Firmware implements Monero signing')
+        self.refuse(name for wire_id, name in sorted(MONERO_WIRE_IDS.items())
+                    if wire_id >= 1810 and name.endswith('Request'))
+
+    def test_bitcoin_only_refuses_every_monero_request(self):
+        self.requires_bitcoinOnly()
+        self.refuse(name for _, name in sorted(MONERO_WIRE_IDS.items())
+                    if name.startswith('MoneroGet') or name.endswith('Request'))
+
+    def test_receive_requests_need_7_17(self):
+        self.requires_firmware_below("7.17.0")
+        self.refuse(name for wire_id, name in sorted(MONERO_WIRE_IDS.items())
+                    if wire_id < 1810 and
+                    (name.startswith('MoneroGet') or name.endswith('Request')))
 
 
 if __name__ == '__main__':
