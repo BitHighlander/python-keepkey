@@ -37,6 +37,8 @@ class TestMsgGetaddressSegwitNative(common.KeepKeyTest):
         self.assertEqual(self.client.get_address("Testnet", parse_path("44'/1'/0'/0/0"), False, None, script_type=proto.SPENDADDRESS), 'mvbu1Gdy8SUjTenqerxUaZyYjmveZvt33q')
 
     def test_groestlcoin_segwit(self):
+        # Groestlcoin was removed in 7.17.0.
+        self.requires_firmware_below("7.17.0")
         # Groestlcoin is not in bitcoin-only firmware; Bitcoin bech32 display
         # above runs on every build.
         self.requires_fullFeature()

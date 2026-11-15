@@ -50,6 +50,8 @@ class TestMsgVerifymessage(common.KeepKeyTest):
         self.assertTrue(ret)
 
     def test_message_grs(self):
+        # Groestlcoin was removed in 7.17.0.
+        self.requires_firmware_below("7.17.0")
         self.requires_fullFeature()
         self.setup_mnemonic_allallall()
         sig = base64.b64decode('INOYaa/jj8Yxz3mD5k+bZfUmjkjB9VzoV4dNG7+RsBUyK30xL7I9yMgWWVvsL46C5yQtxtZY0cRRk7q9N6b+YTM=')
