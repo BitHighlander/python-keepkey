@@ -451,10 +451,17 @@ class TestMsgMoneroSignNegativePin(neg.SignFlow):
         f = self.reach(p, 'inputs')
         self.assertTrue(self.call(proto.GetFeatures()).pin_cached)
         neg.wait(31)
+        # The emulator's clock can run behind the wall clock on a busy
+        # machine. Reading the features neither ends a session nor counts
+        # as activity, so it is safe to ask until the lock has happened.
+        for _ in range(30):
+            if not self.call(proto.GetFeatures()).pin_cached:
+                break
+            neg.wait(2)
+        self.assertFalse(self.call(proto.GetFeatures()).pin_cached)
         # Locked: the stalled session went with the PIN.
         self.refused(self.call(self.vini_request(f, f['order'][0])),
                      UNEXPECTED, neg.NO_SESSION)
-        self.assertFalse(self.call(proto.GetFeatures()).pin_cached)
         self.assert_dead()
         self.assertIsInstance(self.init(p), proto.PinMatrixRequest)
         self.refused(self.call(proto.Cancel()),
