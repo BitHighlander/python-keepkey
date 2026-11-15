@@ -265,9 +265,10 @@ class SignFlow(common.KeepKeyTest):
         self.client.transport._write(frame, None)
         return self.client.transport.read_blocking()
 
-    def pending(self, quiet=0.3):
+    def pending(self, quiet=0.1):
         """Whatever the device sends without being asked, until it has been
-        silent for `quiet` seconds."""
+        silent for `quiet` seconds. (An answer later than that would be read
+        as the next request's and fail the test there.)"""
         out = []
         while select.select([self.client.transport.socket], [], [], quiet)[0]:
             out.append(self.client.transport.read_blocking())
