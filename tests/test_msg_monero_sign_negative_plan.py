@@ -7,10 +7,13 @@ before any screen is drawn, and the earlier session must be gone too.
 
 import unittest
 
+import common
 import monero_fixtures as xmr
 import monero_sign_negative as neg
 from monero_sign_negative import SYNTAX, UNEXPECTED
+from keepkeylib import messages_pb2 as proto
 from keepkeylib import messages_monero_pb2 as monero_proto
+from keepkeylib import types_pb2 as proto_types
 
 U64 = 2 ** 64 - 1
 
@@ -282,6 +285,25 @@ class TestMsgMoneroSignNegativePlan(neg.SignFlow):
                                       'view_public_key',
                                       neg.torsioned(own[1])), neg.POINT)
         self.signs()
+
+
+class TestMsgMoneroSignNegativeNoWallet(common.KeepKeyTest):
+
+    def test_a_wiped_device_starts_nothing(self):
+        self.requires_firmware("7.17.0")
+        self.requires_fullFeature()
+        self.requires_release_capability('monero-signing')
+        response = self.client.call_raw(monero_proto.MoneroTxInitRequest(
+            address_n=xmr.path(0), tsx_data=neg.plan()['data']))
+        self.assertIsInstance(response, proto.Failure)
+        self.assertEqual(
+            (response.code, response.message),
+            (proto_types.Failure_NotInitialized, 'Device not initialized'))
+        for message in neg.continuations():
+            response = self.client.call_raw(message)
+            self.assertIsInstance(response, proto.Failure)
+            self.assertEqual((response.code, response.message),
+                             (UNEXPECTED, neg.NO_SESSION))
 
 
 if __name__ == '__main__':
