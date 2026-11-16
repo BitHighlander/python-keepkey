@@ -169,7 +169,8 @@ class TestMsgMoneroSignNegativePlan(neg.SignFlow):
         account_1 = neg.signtx.address_keys(
             xmr.ADDRESSES[('abandon', 0)][(1, 0)])
 
-        self.refuse(lambda d: d.ClearField('change_dts'), neg.CHANGE)
+        # No declared change is a send-max plan: allowed, and both outputs
+        # are then reviewed as payments (see the screens tests).
         for field in ('amount', 'spend_public_key', 'view_public_key'):
             self.refuse(lambda d: d.change_dts.ClearField(field), neg.CHANGE)
         for field in ('spend_public_key', 'view_public_key'):

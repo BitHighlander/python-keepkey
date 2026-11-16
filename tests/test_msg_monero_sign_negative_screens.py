@@ -189,15 +189,17 @@ class TestMsgMoneroSignNegativeScreens(neg.SignFlow):
                 self.assertIsInstance(response, monero_proto.MoneroTxInitAck)
                 # With equal amounts the first is the change.
                 first = change_first or send == change
-                titles = ['Monero change', 'Monero send'] if first else \
-                    ['Monero send', 'Monero change']
+                paid = 'Monero send' if send else 'Monero zero-amount output'
+                titles = ['Monero change', paid] if first else \
+                    [paid, 'Monero change']
                 bodies = dict(shown)
                 self.assertEqual([t for t, _ in shown],
                                  titles + ['Sign Monero'])
                 self.assertEqual(
-                    bodies['Monero send'],
-                    'Send %s to standard address\n%s' % (xmr_amount(send),
-                                                         neg.OWN))
+                    bodies[paid],
+                    ('Send %s to standard address\n%s' if send else
+                     'Zero-amount output: %s to standard address\n%s') %
+                    (xmr_amount(send), neg.OWN))
                 self.assertEqual(
                     bodies['Monero change'],
                     'Change %s returns to this wallet (account 0), to your '
@@ -207,6 +209,22 @@ class TestMsgMoneroSignNegativeScreens(neg.SignFlow):
                 f = self.finish(self.reach(p, 'signed'))
                 self.assertEqual(len(f['clsags']), 1)
         self.signs()
+
+    def test_no_declared_change_reviews_both_outputs_as_payments(self):
+        # A send-max plan declares no change. Nothing is taken on trust:
+        # both outputs are reviewed as payments, the wallet's own included,
+        # and the total counts both.
+        p = neg.plan()
+        data = p['data']
+        data.ClearField('change_dts')
+        response, shown = self.reviewed(p)
+        self.assertIsInstance(response, monero_proto.MoneroTxInitAck)
+        self.assertEqual([t for t, _ in shown],
+                         ['Monero send', 'Monero send', 'Sign Monero'])
+        total = sum(o.amount for o in data.outputs) + data.fee
+        self.assertIn('Total %s\n' % xmr_amount(total), shown[-1][1])
+        for output, (_, body) in zip(data.outputs, shown):
+            self.assertIn(xmr_amount(output.amount), body)
 
     def test_largest_amounts_and_longest_screens(self):
         # The longest text each screen can carry: the largest account, the
