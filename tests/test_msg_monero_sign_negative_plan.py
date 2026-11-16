@@ -38,6 +38,12 @@ class TestMsgMoneroSignNegativePlan(neg.SignFlow):
         spend = neg.signtx.address_keys(neg.OWN)[0]
         return [d.spend_public_key for d in data.outputs].index(spend)
 
+    def test_nonzero_unlock_time(self):
+        for unlock_time in (1, 3000000, U64):
+            self.refuse(lambda d: setattr(d, 'unlock_time', unlock_time),
+                        'Monero unlock time must be zero')
+        self.signs()
+
     def test_output_count(self):
         def outputs(count):
             def change(data):

@@ -23,10 +23,9 @@ TINY_MALFORMED = 'Malformed tiny packet'
 
 def long_plan():
     """The review with the most pages: an integrated recipient with its
-    payment ID, change, and a lock warning."""
+    payment ID and change."""
     p = neg.plan(2)
     neg.integrate(p)
-    p['data'].unlock_time = 3000000
     return p
 
 
@@ -56,7 +55,7 @@ class TestMsgMoneroSignNegativeFlow(neg.SignFlow):
         self.assertEqual(
             [t.rsplit(' ', 1)[0] if t[-1].isdigit() else t for t in titles],
             ['Monero send'] * 2 + ['Monero payment ID'] +
-            ['Monero change'] * 2 + ['Monero WARNING', 'Sign Monero'])
+            ['Monero change'] * 2 + ['Sign Monero'])
         for k in range(len(pages)):
             before = (True,) * k
             # The button, the host's Cancel, and a restart of the host.
@@ -78,7 +77,7 @@ class TestMsgMoneroSignNegativeFlow(neg.SignFlow):
         old = self.reach(neg.plan(2), 'inputs')
         ack, pages = self.review(p['data'])
         self.assertIsInstance(ack, monero_proto.MoneroTxInitAck)
-        self.assertEqual(len(pages), 7)
+        self.assertEqual(len(pages), 6)
         for k in range(len(pages)):
             before = (True,) * k
             # What a prompt does not expect, from the answers to other

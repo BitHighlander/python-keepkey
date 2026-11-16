@@ -44,7 +44,7 @@ class TestMsgMoneroSignNegativeScreens(neg.SignFlow):
         return response, list(joined.texts)
 
     def expect(self, p, shown, network=0, name='Monero', kinds=None,
-               payment_id=None, account=0, lock=None):
+               payment_id=None, account=0):
         """The whole review, word for word, built from the plan the way the
         device must have built it from its own classification."""
         data = p['data']
@@ -75,11 +75,6 @@ class TestMsgMoneroSignNegativeScreens(neg.SignFlow):
                     name + ' payment ID',
                     'Payment ID %s is sent with this payment.' %
                     payment_id.hex()))
-        if lock is not None:
-            expected.append((
-                name + ' WARNING',
-                'These funds are locked: nobody can spend them before block '
-                'or time %d.' % lock))
         inputs = data.num_inputs
         expected.append((
             'Sign ' + name, 'Fee %s\nTotal %s\n%d input(s), ring 16, about '
@@ -163,12 +158,10 @@ class TestMsgMoneroSignNegativeScreens(neg.SignFlow):
         payment_id = bytes(range(8))
         for network, name in ((1, 'Monero TESTNET'), (2, 'Monero STAGENET')):
             p = neg.integrate(neg.plan(2), payment_id)
-            p['data'].unlock_time = 3000000
             response, shown = self.reviewed(p, network)
             self.assertIsInstance(response, monero_proto.MoneroTxInitAck)
-            self.expect(p, shown, network, name, payment_id=payment_id,
-                        lock=3000000)
-            self.assertEqual(len(shown), 5)
+            self.expect(p, shown, network, name, payment_id=payment_id)
+            self.assertEqual(len(shown), 4)
             # None of this network's addresses is a mainnet one.
             for _, body in shown[:3:2]:
                 self.assertNotIn(neg.PAYEE[:8], body)
@@ -217,7 +210,7 @@ class TestMsgMoneroSignNegativeScreens(neg.SignFlow):
 
     def test_largest_amounts_and_longest_screens(self):
         # The longest text each screen can carry: the largest account, the
-        # largest amounts, an integrated recipient, the largest lock.
+        # largest amounts and an integrated recipient.
         account, payment_id = 2 ** 32 - 1, bytes([0xff] * 8)
         p = neg.account_plan(account, [(neg.OUTPUTS[0], 10 ** 12)] * 64)
         neg.integrate(p, payment_id)
@@ -228,16 +221,14 @@ class TestMsgMoneroSignNegativeScreens(neg.SignFlow):
         data.outputs[own].amount = data.change_dts.amount = \
             10000000000000000000
         data.outputs[1 - own].amount = U64 - data.fee - 10 ** 19
-        data.unlock_time = U64
         response, shown = self.reviewed(p)
         self.assertIsInstance(response, monero_proto.MoneroTxInitAck)
-        self.expect(p, shown, payment_id=payment_id, account=account,
-                    lock=U64)
+        self.expect(p, shown, payment_id=payment_id, account=account)
         self.assertIn('Send 8446743.073709551615 XMR', shown[0][1])
         self.assertIn('Change 10000000.000000000000 XMR', shown[2][1])
         self.assertIn('(account 4294967295)', shown[2][1])
         self.assertIn('Total 8446744.073709551615 XMR\n64 input(s)',
-                      shown[4][1])
+                      shown[3][1])
         # One input worth every atomic unit there is still signs.
         p = neg.plan()
         data = p['data']
