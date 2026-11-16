@@ -163,6 +163,11 @@ class TestMsgMoneroSignStream(common.KeepKeyTest):
         self.assertEqual(len(extra), 44)
         self.assertEqual((extra[0], extra[33:36]), (1, b'\x02\x09\x01'))
         R = xmr._decode(extra[1:33])
+        # Final's payment-proof secret opens the public key in the signed extra.
+        self.assertEqual(len(signed.tx_key), 32)
+        self.assertEqual(xmr._encode(xmr._mul(
+            xmr.G, int.from_bytes(signed.tx_key, 'little'))), extra[1:33])
+        self.assertEqual(signed.additional_tx_keys, [])
 
         # Every output scans for its recipient with only its view key.
         self.assertEqual(len(tx['outputs']), 2)

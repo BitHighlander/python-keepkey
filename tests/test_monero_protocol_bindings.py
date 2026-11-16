@@ -45,6 +45,19 @@ MONERO_WIRE_IDS = {
 
 class TestMoneroProtocolBindings(unittest.TestCase):
 
+    def test_final_has_payment_proof_keys(self):
+        fields = monero_proto.MoneroTxFinalAck.DESCRIPTOR.fields_by_name
+        self.assertIn('tx_key', fields)
+        self.assertIn('additional_tx_keys', fields)
+        self.assertEqual(fields['tx_key'].number, 2)
+        self.assertEqual(fields['tx_key'].label, fields['tx_key'].LABEL_OPTIONAL)
+        self.assertEqual(fields['tx_key'].type, fields['tx_key'].TYPE_BYTES)
+        self.assertEqual(fields['additional_tx_keys'].number, 3)
+        self.assertEqual(fields['additional_tx_keys'].label,
+                         fields['additional_tx_keys'].LABEL_REPEATED)
+        self.assertEqual(fields['additional_tx_keys'].type,
+                         fields['additional_tx_keys'].TYPE_BYTES)
+
     def test_wire_ids_map_to_monero_messages(self):
         for wire_id, name in MONERO_WIRE_IDS.items():
             self.assertEqual(proto.MessageType.Value('MessageType_' + name), wire_id)

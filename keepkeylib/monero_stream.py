@@ -54,6 +54,8 @@ SignedTx = collections.namedtuple('SignedTx', [
     'tx_hash',     # its id
     'key_images',  # of the inputs, in transaction order
     'outputs',     # the plan's outputs in transaction order
+    'tx_key',      # r, released at Final for standard payment proofs
+    'additional_tx_keys',  # additional keys in output order, when used
 ])
 
 
@@ -158,7 +160,7 @@ def clsag_message(prefix_hash, base, bp_plus):
 
 
 def sign(client, address_n, plan, network=None, rng=None):
-    """Sign `plan` on the device and return the SignedTx.
+    """Sign `plan` and return the SignedTx, including payment-proof keys.
 
     address_n is m/44'/128'/account'. The outputs are shuffled first, as
     Monero Core does, so the change is not always last; pass rng to control
@@ -217,4 +219,6 @@ def sign(client, address_n, plan, network=None, rng=None):
         blob=prefix + base + prunable,
         tx_hash=keccak256(prefix_hash + keccak256(base) + keccak256(prunable)),
         key_images=[key_image(v) for v in vinis],
-        outputs=outputs)
+        outputs=outputs,
+        tx_key=final.tx_key,
+        additional_tx_keys=list(final.additional_tx_keys))
