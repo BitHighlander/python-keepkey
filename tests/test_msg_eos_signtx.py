@@ -384,7 +384,13 @@ class TestMsgEosSignTx(common.KeepKeyTest):
                         num_actions=1),
                     [self.action_transfer()] * 2)
         except CallException as e:
-            self.assertEndsWith(e.args[1], "Action count mismatch")
+            if 32 in self.client.features.capabilities:
+                # The native-contact product ends EOS at its signature. The
+                # surplus packet is now a stale continuation, never a new sign.
+                self.assertEqual(e.args[0], types_pb2.Failure_UnexpectedMessage)
+                self.assertEqual(e.args[1], "EOS signing not in progress")
+            else:
+                self.assertEndsWith(e.args[1], "Action count mismatch")
         else:
             self.assert_(False, "Negative test passed")
 

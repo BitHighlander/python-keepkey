@@ -133,6 +133,7 @@
       "required_by": [
         "test_msg_bitcoin_only_variant.py",
         "test_msg_mayachain_signtx.py",
+        "test_msg_native_certified_contacts.py",
         "test_msg_signing_boundaries.py",
         "test_msg_signtx.py",
         "test_msg_signtx_raw.py",

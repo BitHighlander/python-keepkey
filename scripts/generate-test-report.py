@@ -3916,6 +3916,7 @@ _TEST_CAPABILITY = {
 _MODULE_CAPABILITY = {
     'test_msg_ethereum_erc7730_runtime': 'erc7730-runtime-review',
     'test_msg_ethereum_certified_contacts': 'certified-contacts',
+    'test_msg_native_certified_contacts': 'certified-contacts-all-chains',
 }
 
 

@@ -47,8 +47,6 @@ class TestMsgEthereumSigntx(common.KeepKeyTest):
         if self.firmware_at_least("7.15.0"):
             expected_frames = {
                 "transfer": (
-                    "843693d0c5f8f87986a1769c6e5192a6746cbfcb24c7c4c37d335b10c1f5b54c"
-                    if self.firmware_at_least("7.17.0") else
                     "48eab4f4d0e125199325f4b5a601583250462f06b98514b4b56b3b3298169211"),
                 "approve": (
                     "76dc40a70e5b6a95de28d57b71b40e4ca3da2c115e03c66fe03d3c0afda68c15"),

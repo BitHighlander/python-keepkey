@@ -18,6 +18,8 @@ import common
 import binascii
 import struct
 import hashlib
+import json
+import os
 import base64
 
 from keepkeylib import messages_pb2 as messages
@@ -47,6 +49,21 @@ class TestMsgTonSignTx(common.KeepKeyTest):
         self.requires_firmware("7.14.0")
         self.requires_message("TonGetAddress")
         self.requires_message("TonGetAddress")
+
+    def _verified_message(self, path=TON_PATH, memo_len=0):
+        """A real WalletV4R2 body hash from the independent @ton/core oracle.
+
+        Older firmware blind-signs this same hash under AdvancedMode. Native
+        contact firmware verifies the fields before reviewing/signing it.
+        """
+        with open(os.path.join(os.path.dirname(__file__), 'ton_transfer_vectors.json')) as f:
+            vectors = json.load(f)
+        v = next(v for v in vectors if v['amount'] == '1000000000'
+                 and v['workchain'] == 0 and v['bounce'] and len(v['memo']) == memo_len)
+        return ton_messages.TonSignTx(
+            address_n=parse_path(path), raw_tx=bytes.fromhex(v['hash']),
+            to_address=v['address'], amount=int(v['amount']), seqno=v['seqno'],
+            expire_at=v['expiry'], workchain=0, bounce=True, memo=v['memo'])
 
     def test_ton_get_address(self):
         """Test TON address derivation from device."""
@@ -174,39 +191,12 @@ class TestMsgTonSignTx(common.KeepKeyTest):
             self.client.call(msg)
 
     def test_ton_sign_deterministic(self):
-        """Test that signing the same message produces same signature."""
+        """The same verified WalletV4R2 transfer has the same signature."""
         self.requires_fullFeature()
         self.setup_mnemonic_allallall()
-        # 7.14.2 gates TonSignTx behind AdvancedMode: the device cannot parse
-        # raw_tx, so every TonSignTx is a blind signature and must be disclosed
-        # as one. This test exercises signing correctness, so it opts in
-        # explicitly rather than the firmware relaxing the gate.
-        self.client.apply_policy("AdvancedMode", 1)
-
-        dest_addr = make_ton_address()
-        raw_tx = hashlib.sha256(b'test-ton-deterministic').digest() * 2  # 64 bytes
-
-        msg1 = ton_messages.TonSignTx(
-            address_n=parse_path(TON_PATH),
-            raw_tx=raw_tx,
-            to_address=dest_addr,
-            amount=1000000000,
-            seqno=1,
-            expire_at=1700000000,
-        )
-        resp1 = self.client.call(msg1)
-
-        msg2 = ton_messages.TonSignTx(
-            address_n=parse_path(TON_PATH),
-            raw_tx=raw_tx,
-            to_address=dest_addr,
-            amount=1000000000,
-            seqno=1,
-            expire_at=1700000000,
-        )
-        resp2 = self.client.call(msg2)
-
-        self.assertEqual(resp1.signature, resp2.signature)
+        self.client.apply_policy("AdvancedMode", 1)  # older blind-only firmware
+        msg = self._verified_message()
+        self.assertEqual(self.client.call(msg).signature, self.client.call(msg).signature)
 
     def test_ton_sign_empty_raw_tx(self):
         """Empty raw_tx (0 bytes) should be rejected by firmware."""
@@ -247,170 +237,49 @@ class TestMsgTonSignTx(common.KeepKeyTest):
             self.client.call(msg)
 
     def test_ton_sign_with_empty_memo(self):
-        """Empty memo string should be accepted (memo is optional text)."""
+        """An empty comment binds to the independently built empty-body hash."""
         self.requires_fullFeature()
         self.setup_mnemonic_allallall()
-        # 7.14.2 gates TonSignTx behind AdvancedMode: the device cannot parse
-        # raw_tx, so every TonSignTx is a blind signature and must be disclosed
-        # as one. This test exercises signing correctness, so it opts in
-        # explicitly rather than the firmware relaxing the gate.
         self.client.apply_policy("AdvancedMode", 1)
-
-        dest_addr = make_ton_address()
-        raw_tx = hashlib.sha256(b'test-ton-empty-memo').digest() * 2  # 64 bytes
-
-        msg = ton_messages.TonSignTx(
-            address_n=parse_path(TON_PATH),
-            raw_tx=raw_tx,
-            to_address=dest_addr,
-            amount=100000000,  # 0.1 TON
-            seqno=3,
-            expire_at=1700000000,
-            memo="",
-        )
-        resp = self.client.call(msg)
-
-        self.assertEqual(len(resp.signature), 64)
+        self.assertEqual(len(self.client.call(self._verified_message(memo_len=0)).signature), 64)
 
     def test_ton_sign_with_long_memo(self):
-        """Memo of 120 characters (near max_size 121) should be accepted."""
+        """A 120-byte comment binds to the independently built referenced cell."""
         self.requires_fullFeature()
         self.setup_mnemonic_allallall()
-        # 7.14.2 gates TonSignTx behind AdvancedMode: the device cannot parse
-        # raw_tx, so every TonSignTx is a blind signature and must be disclosed
-        # as one. This test exercises signing correctness, so it opts in
-        # explicitly rather than the firmware relaxing the gate.
         self.client.apply_policy("AdvancedMode", 1)
-
-        dest_addr = make_ton_address()
-        raw_tx = hashlib.sha256(b'test-ton-long-memo').digest() * 2  # 64 bytes
-        long_memo = "A" * 120
-
-        msg = ton_messages.TonSignTx(
-            address_n=parse_path(TON_PATH),
-            raw_tx=raw_tx,
-            to_address=dest_addr,
-            amount=200000000,  # 0.2 TON
-            seqno=4,
-            expire_at=1700000000,
-            memo=long_memo,
-        )
-        resp = self.client.call(msg)
-
-        self.assertEqual(len(resp.signature), 64)
+        self.assertEqual(len(self.client.call(self._verified_message(memo_len=120)).signature), 64)
 
     def test_ton_sign_workchain_zero(self):
-        """Explicit workchain=0 (basechain) in TonSignTx."""
+        """An explicit basechain recipient is checked against its body hash."""
         self.requires_fullFeature()
         self.setup_mnemonic_allallall()
-        # 7.14.2 gates TonSignTx behind AdvancedMode: the device cannot parse
-        # raw_tx, so every TonSignTx is a blind signature and must be disclosed
-        # as one. This test exercises signing correctness, so it opts in
-        # explicitly rather than the firmware relaxing the gate.
         self.client.apply_policy("AdvancedMode", 1)
-
-        dest_addr = make_ton_address()
-        raw_tx = hashlib.sha256(b'test-ton-workchain-zero').digest() * 2  # 64 bytes
-
-        msg = ton_messages.TonSignTx(
-            address_n=parse_path(TON_PATH),
-            raw_tx=raw_tx,
-            to_address=dest_addr,
-            amount=1000000000,  # 1 TON
-            seqno=5,
-            expire_at=1700000000,
-            workchain=0,
-            bounce=True,
-        )
-        resp = self.client.call(msg)
-
-        self.assertEqual(len(resp.signature), 64)
-        self.assertFalse(all(b == 0 for b in resp.signature))
+        response = self.client.call(self._verified_message())
+        self.assertEqual(len(response.signature), 64)
+        self.assertFalse(all(b == 0 for b in response.signature))
 
     def test_ton_sign_workchain_default(self):
-        """Omitting workchain field should default to 0 (basechain).
-
-        The signature must match an explicit workchain=0 request with
-        otherwise identical parameters.
-        """
+        """Omitting workchain matches the explicit workchain in the address."""
         self.requires_fullFeature()
         self.setup_mnemonic_allallall()
-        # 7.14.2 gates TonSignTx behind AdvancedMode: the device cannot parse
-        # raw_tx, so every TonSignTx is a blind signature and must be disclosed
-        # as one. This test exercises signing correctness, so it opts in
-        # explicitly rather than the firmware relaxing the gate.
         self.client.apply_policy("AdvancedMode", 1)
-
-        dest_addr = make_ton_address()
-        raw_tx = hashlib.sha256(b'test-ton-workchain-default').digest() * 2  # 64 bytes
-
-        # Without workchain field
-        msg_default = ton_messages.TonSignTx(
-            address_n=parse_path(TON_PATH),
-            raw_tx=raw_tx,
-            to_address=dest_addr,
-            amount=1000000000,
-            seqno=6,
-            expire_at=1700000000,
-            bounce=True,
-        )
-        resp_default = self.client.call(msg_default)
-
-        # With explicit workchain=0
-        msg_explicit = ton_messages.TonSignTx(
-            address_n=parse_path(TON_PATH),
-            raw_tx=raw_tx,
-            to_address=dest_addr,
-            amount=1000000000,
-            seqno=6,
-            expire_at=1700000000,
-            workchain=0,
-            bounce=True,
-        )
-        resp_explicit = self.client.call(msg_explicit)
-
-        self.assertEqual(len(resp_default.signature), 64)
-        self.assertEqual(resp_default.signature, resp_explicit.signature)
+        msg = self._verified_message()
+        explicit = self.client.call(msg)
+        msg.ClearField('workchain')
+        default = self.client.call(msg)
+        self.assertEqual(default.signature, explicit.signature)
 
     def test_ton_sign_different_accounts(self):
-        """Signing with different account paths must produce different signatures."""
+        """The same signed transfer hash under different account keys differs."""
         self.requires_fullFeature()
         self.setup_mnemonic_allallall()
-        # 7.14.2 gates TonSignTx behind AdvancedMode: the device cannot parse
-        # raw_tx, so every TonSignTx is a blind signature and must be disclosed
-        # as one. This test exercises signing correctness, so it opts in
-        # explicitly rather than the firmware relaxing the gate.
         self.client.apply_policy("AdvancedMode", 1)
-
-        dest_addr = make_ton_address()
-        raw_tx = hashlib.sha256(b'test-ton-different-accounts').digest() * 2  # 64 bytes
-
-        msg_acct0 = ton_messages.TonSignTx(
-            address_n=parse_path("m/44'/607'/0'/0'/0'/0'"),
-            raw_tx=raw_tx,
-            to_address=dest_addr,
-            amount=1000000000,
-            seqno=1,
-            expire_at=1700000000,
-        )
-        resp_acct0 = self.client.call(msg_acct0)
-
-        msg_acct1 = ton_messages.TonSignTx(
-            address_n=parse_path("m/44'/607'/1'/0'/0'/0'"),
-            raw_tx=raw_tx,
-            to_address=dest_addr,
-            amount=1000000000,
-            seqno=1,
-            expire_at=1700000000,
-        )
-        resp_acct1 = self.client.call(msg_acct1)
-
-        self.assertEqual(len(resp_acct0.signature), 64)
-        self.assertEqual(len(resp_acct1.signature), 64)
-        self.assertNotEqual(
-            resp_acct0.signature, resp_acct1.signature,
-            "Different account paths must produce different signatures"
-        )
+        first = self.client.call(self._verified_message("m/44'/607'/0'/0'/0'/0'"))
+        second = self.client.call(self._verified_message("m/44'/607'/1'/0'/0'/0'"))
+        self.assertEqual(len(first.signature), 64)
+        self.assertEqual(len(second.signature), 64)
+        self.assertNotEqual(first.signature, second.signature)
 
 
 if __name__ == '__main__':
