@@ -96,10 +96,13 @@ class TestMsgTonSignTx(common.KeepKeyTest):
             expire_at=1700000000,
             bounce=True,
         )
-        resp = self.client.call(msg)
-
-        self.assertEqual(len(resp.signature), 64)
-        self.assertFalse(all(b == 0 for b in resp.signature))
+        if 32 in self.client.features.capabilities:
+            with self.assertRaises(CallException):
+                self.client.call(msg)
+        else:
+            resp = self.client.call(msg)
+            self.assertEqual(len(resp.signature), 64)
+            self.assertFalse(all(b == 0 for b in resp.signature))
 
     def test_ton_sign_with_memo(self):
         """Test TON transfer with a text memo (blind-sign path)."""
@@ -125,9 +128,12 @@ class TestMsgTonSignTx(common.KeepKeyTest):
             expire_at=1700000000,
             memo="Hello TON!",
         )
-        resp = self.client.call(msg)
-
-        self.assertEqual(len(resp.signature), 64)
+        if 32 in self.client.features.capabilities:
+            with self.assertRaises(CallException):
+                self.client.call(msg)
+        else:
+            resp = self.client.call(msg)
+            self.assertEqual(len(resp.signature), 64)
 
     def test_ton_sign_legacy_raw_tx(self):
         """Test legacy blind-sign with raw_tx field."""
