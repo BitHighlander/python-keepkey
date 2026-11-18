@@ -33,6 +33,9 @@ def entry(network, address, label='Trusted recipient'):
 class TestNativeCertifiedContacts(common.KeepKeyTest):
     def setUp(self):
         super(TestNativeCertifiedContacts, self).setUp()
+        # Before 7.15 the firmware sends no capability list and the shared
+        # helper deliberately cannot gate on one; don't probe a legacy device.
+        self.requires_firmware('7.15.0')
         self.requires_fullFeature()
         self.requires_release_capability('certified-contacts-all-chains')
         self.setup_mnemonic_allallall()
@@ -297,6 +300,7 @@ class TestNativeCertifiedContacts(common.KeepKeyTest):
                           lambda: self.client.zcash_sign_pczt(**kwargs))
 
     def test_monero_standard_subaddress_and_integrated(self):
+        self.requires_release_capability('monero-signing')
         from test_msg_monero_sign_stream import TestMsgMoneroSignStream, CASES
         self.client.wipe_device()
         self.setup_mnemonic_abandon()
