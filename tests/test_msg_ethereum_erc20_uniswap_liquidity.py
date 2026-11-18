@@ -148,26 +148,24 @@ class TestMsgEthereumUniswaptxERC20(common.KeepKeyTest):
                     '00000000000000000000000000000000000000000000000000000178b2062f3d')
             )
 
-        if self.firmware_at_least("7.17.0"):
-            # Alpha explicitly discloses the external recipient and accepts
-            # only the owner's approval; retain its historical signature.
-            with ScreenRecorder(self.client) as recorder:
-                sig_v, sig_r, sig_s = sign()
-            self.assertIsNotNone(find_text(recorder.screens,
-                "NOT this wallet\n0x5028d647b74f12903e6d5f3969f8f624e6a9a93d"))
-            self.assertEqual(sig_v, 37)
-            self.assertEqual(sig_r.hex(),
-                "7143f0d8e5505a8cfb1df55e9c5d7433eba33a61959137c08cc5c088ec12ab5d")
-            self.assertEqual(sig_s.hex(),
-                "20b456d6c13295f5abb6109d7ade2c5d5fc395963b1e45d92e6dc8c33749c517")
-            with self.assertRaises(CallException) as caught:
-                with ScreenRecorder(self.client, answer=False):
-                    sign()
-        else:
-            with self.assertRaises(CallException) as caught:
+        # Both the pinned 7.15 candidate (97fdfa027) and alpha disclose the
+        # external recipient and sign only after approval. This behavior
+        # predates 7.17; checking that version incorrectly expected refusal
+        # from 7.15 even though its complete warning was approved.
+        with ScreenRecorder(self.client) as recorder:
+            sig_v, sig_r, sig_s = sign()
+        self.assertIsNotNone(find_text(recorder.screens,
+            "NOT this wallet\n0x5028d647b74f12903e6d5f3969f8f624e6a9a93d"))
+        self.assertEqual(sig_v, 37)
+        self.assertEqual(sig_r.hex(),
+            "7143f0d8e5505a8cfb1df55e9c5d7433eba33a61959137c08cc5c088ec12ab5d")
+        self.assertEqual(sig_s.hex(),
+            "20b456d6c13295f5abb6109d7ade2c5d5fc395963b1e45d92e6dc8c33749c517")
+        with self.assertRaises(CallException) as caught:
+            with ScreenRecorder(self.client, answer=False):
                 sign()
-            self.assertEqual(caught.exception.args[0],
-                             proto_types.Failure_ActionCancelled)
+        self.assertEqual(caught.exception.args[0],
+                         proto_types.Failure_ActionCancelled)
 
 if __name__ == '__main__':
     unittest.main()
