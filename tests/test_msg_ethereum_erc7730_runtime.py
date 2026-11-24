@@ -759,11 +759,18 @@ class TestMsgEthereumErc7730Runtime(Erc7730Harness, common.KeepKeyTest):
 
     def test_inner_finite_approve_shows_no_unlimited_warning(self):
         # 2^255 - 1: finite under every firmware's threshold.
+        device_review = self.firmware_version() >= semver.VersionInfo.parse("7.17.0")
         arguments, catalog = self._exec_approve((1 << 255) - 1)
         self._exec_certified(arguments, catalog)
         titles = [s[0] for s in self.screens]
         self.assertNotIn("UNLIMITED approval", titles)
         self.assertIn("Inner action", titles)
+        if device_review:
+            self.assertIn(("Token approval",
+                           "Contract 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48\n"
+                           "Spender 0x%s\nAmount in base units: %d" %
+                           (OTHER_ADDRESS.hex(), (1 << 255) - 1)),
+                          self._first_pages())
 
     def test_inner_approve_uses_the_top_level_threshold(self):
         # 7.17: an embedded approve of 2^255 or more is UNLIMITED, as a
@@ -849,6 +856,10 @@ class TestMsgEthereumErc7730Runtime(Erc7730Harness, common.KeepKeyTest):
     def test_certified_finite_approve_signs_after_its_review(self):
         program, arguments = self._allowance(self.APPROVE, 42)
         shown = self._allowance_signed(program, arguments)
+        self.assertEqual(shown[0], ("Token approval",
+                         "Contract 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48\n"
+                         "Spender 0x%s\nAmount in base units: 42" %
+                         OTHER_ADDRESS.hex()))
         self.assertNotIn("UNLIMITED approval", [s[0] for s in shown])
         fields = [s for s in shown
                   if s[0] in ("Contract action", "Signer field")]
@@ -1392,24 +1403,20 @@ class TestMsgEthereumErc7730Runtime(Erc7730Harness, common.KeepKeyTest):
 
     @staticmethod
     def _extra_data(tag):
-        """The device's screen for a suffix: shown in hex up to 128 bytes,
-        stated by its length beyond."""
+        """Firmware discloses every byte of an accepted suffix."""
         if len(tag) == 1:
             text = ("1 more byte follows the arguments. The description "
                     "above does not cover it")
         else:
             text = ("%d more bytes follow the arguments. The description "
                     "above does not cover them" % len(tag))
-        return ("Extra data", text + (":\n0x" + tag.hex() if len(tag) <= 128
-                                      else ". They are too long to show "
-                                      "here."))
+        return ("Extra data", text + ":\n0x" + tag.hex())
 
     def test_allowed_trailing_bytes_are_shown(self):
         self.requires_firmware("7.17.0")
         arguments = self._word(42) + self._word(OTHER_ADDRESS)
         for tag in (b"\x01", bytes.fromhex("0bad1dea"), bytes(range(24)),
-                    bytes(32), bytes(range(40)), bytes(range(128)),
-                    bytes(range(129)), bytes(range(256)) * 2):
+                    bytes(32), bytes(range(40)), bytes(range(128))):
             self._certified(self._deposit(True), arguments + tag)
             shown = [s for s in self._first_pages()
                      if s[0] in ("Signer field", "Extra data")]
@@ -1420,6 +1427,19 @@ class TestMsgEthereumErc7730Runtime(Erc7730Harness, common.KeepKeyTest):
         # Without a tag there is nothing to say.
         self._certified(self._deposit(True), arguments)
         self.assertNotIn("Extra data", [s[0] for s in self.screens])
+
+    def test_overlong_suffix_is_refused_before_review(self):
+        self.requires_firmware("7.17.0")
+        program = self._deposit(True)
+        for size in (129, 512):
+            arguments = self._word(42) + self._word(OTHER_ADDRESS) + bytes(size)
+            envelope = self._preload(program)
+            result, buttons, _, _ = self._walk(
+                self._audit_start(program, 4 + len(arguments)), envelope,
+                arguments=arguments)
+            assert_failure(self, result, types.Failure_SyntaxError,
+                           "ERC-7730 calldata does not match definition")
+            self.assertEqual(buttons, 0)
 
     def test_a_suffix_altered_in_any_pass_is_refused(self):
         # The suffix is bound by the reviewed digest like the arguments.
